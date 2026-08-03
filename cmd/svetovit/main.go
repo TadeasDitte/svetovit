@@ -4,12 +4,13 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/spf13/pflag"
 
 	"github.com/TadeasDitte/Svetovit/detectors"
 	"github.com/TadeasDitte/Svetovit/internal/detector"
@@ -23,15 +24,15 @@ func main() {
 }
 
 func run(args []string) int {
-	fs := flag.NewFlagSet("svetovit", flag.ContinueOnError)
-	target := fs.String("target", ".", "path to the CMS install (or tenant directory holding several installs) to scan")
-	depth := fs.Int("depth", scanner.UnlimitedDepth, "max directory levels below -target to search for CMS installs (0 = target only, 1 = target's immediate subdirectories, ...); default is a full recursive search")
-	serverURL := fs.String("server", os.Getenv("ROZHANITSY_URL"), "Rozhanitsy server base URL (env ROZHANITSY_URL)")
+	fs := pflag.NewFlagSet("svetovit", pflag.ContinueOnError)
+	target := fs.StringP("target", "t", ".", "path to the CMS install (or tenant directory holding several installs) to scan")
+	depth := fs.IntP("depth", "d", scanner.UnlimitedDepth, "max directory levels below --target to search for CMS installs (0 = target only, 1 = target's immediate subdirectories, ...); default is a full recursive search")
+	serverURL := fs.StringP("server", "s", os.Getenv("ROZHANITSY_URL"), "Rozhanitsy server base URL (env ROZHANITSY_URL)")
 	token := fs.String("token", os.Getenv("SCAN_TOKEN"), "Rozhanitsy scan host bearer token (env SCAN_TOKEN)")
 	timeout := fs.Duration("timeout", 30*time.Second, "HTTP request timeout")
 
-	confidence := fs.String("confidence", "all", "which results to report: bound (known-vulnerable), unbound (unmatched), or all")
-	minScore := fs.Float64("min-score", 0, "only report vulnerabilities with CVSS score >= this value")
+	confidence := fs.StringP("confidence", "c", "all", "which results to report: bound (known-vulnerable), unbound (unmatched), or all")
+	minScore := fs.Float64P("min-score", "m", 0, "only report vulnerabilities with CVSS score >= this value")
 	severity := fs.String("severity", "", "comma-separated CVSS severities to report, e.g. critical,high")
 
 	outNormal := fs.String("oN", "", "also write the normal-format report to this file")
@@ -43,11 +44,11 @@ func run(args []string) int {
 	}
 
 	if *serverURL == "" {
-		fmt.Fprintln(os.Stderr, "svetovit: -server or ROZHANITSY_URL is required")
+		fmt.Fprintln(os.Stderr, "svetovit: --server or ROZHANITSY_URL is required")
 		return 2
 	}
 	if *token == "" {
-		fmt.Fprintln(os.Stderr, "svetovit: -token or SCAN_TOKEN is required")
+		fmt.Fprintln(os.Stderr, "svetovit: --token or SCAN_TOKEN is required")
 		return 2
 	}
 
@@ -128,7 +129,7 @@ func run(args []string) int {
 	return 0
 }
 
-// parseSections validates -confidence and returns both the local report
+// parseSections validates --confidence and returns both the local report
 // Sections it selects and its normalized form, which is also sent to the
 // API so the server only computes the requested bound/unbound results.
 func parseSections(confidence string) (report.Sections, string, error) {
@@ -144,7 +145,7 @@ func parseSections(confidence string) (report.Sections, string, error) {
 	case "all":
 		return report.Sections{Bound: true, Unbound: true}, normalized, nil
 	default:
-		return report.Sections{}, "", fmt.Errorf("invalid -confidence value %q (want bound, unbound, or all)", confidence)
+		return report.Sections{}, "", fmt.Errorf("invalid --confidence value %q (want bound, unbound, or all)", confidence)
 	}
 }
 
