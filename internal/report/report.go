@@ -1,4 +1,3 @@
-// Package report renders a rozhanitsy.CheckResponse as human-readable text or JSON.
 package report
 
 import (
@@ -20,22 +19,16 @@ var severityRank = map[string]int{
 	"LOW":      1,
 }
 
-// Sections selects which parts of a CheckResponse to render: Bound is the
-// vulnerable/matched components, Unbound is the components that couldn't be
-// resolved against the vulnerability database's product catalog.
 type Sections struct {
 	Bound   bool
 	Unbound bool
 }
 
-// Filter narrows down which vulnerabilities are considered relevant. A zero
-// Filter matches everything.
 type Filter struct {
 	MinScore   float64
-	Severities []string // matched case-insensitively; empty means no restriction
+	Severities []string
 }
 
-// Apply returns the subset of vulns passing f.
 func (f Filter) Apply(vulns []rozhanitsy.Vulnerability) []rozhanitsy.Vulnerability {
 	if f.MinScore <= 0 && len(f.Severities) == 0 {
 		return vulns
@@ -59,7 +52,6 @@ func (f Filter) Apply(vulns []rozhanitsy.Vulnerability) []rozhanitsy.Vulnerabili
 	return out
 }
 
-// Print writes a human-readable summary of resp to w, limited to sections.
 func Print(w io.Writer, resp *rozhanitsy.CheckResponse, sections Sections) {
 	fmt.Fprintf(w, "Scan checked at %s\n\n", resp.CheckedAt.Format(time.RFC3339))
 
@@ -114,7 +106,6 @@ func printUnmatched(w io.Writer, unmatched []rozhanitsy.UnmatchedComponent) {
 	}
 }
 
-// WriteJSON writes resp as JSON to w, limited to sections.
 func WriteJSON(w io.Writer, resp *rozhanitsy.CheckResponse, sections Sections) error {
 	out := *resp
 	if !sections.Bound {

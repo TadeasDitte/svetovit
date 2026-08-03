@@ -1,5 +1,5 @@
-// Package detector identifies CMS platforms and their installed plugins/modules
-// on a filesystem path, extracting version strings via configurable markers and regexes.
+
+
 package detector
 
 import (
@@ -9,24 +9,24 @@ import (
 	"regexp"
 )
 
-// VersionSpec describes where to find a version string: a file relative to the
-// scan root, and a regex whose first capture group is the version.
+
+
 type VersionSpec struct {
 	File  string `yaml:"file"`
 	Regex string `yaml:"regex"`
 }
 
-// PluginSpec describes how to discover installed plugins/modules for a CMS:
-// a glob (relative to the scan root) matching one directory per plugin, and
-// how to extract that plugin's version from a file inside its directory.
+
+
+
 type PluginSpec struct {
 	Glob         string `yaml:"glob"`
 	VersionFile  string `yaml:"version_file"`
 	VersionRegex string `yaml:"version_regex"`
 }
 
-// Detector describes how to recognize a CMS/platform and enumerate its
-// installed version and plugins/modules from a config file (see detectors/*.yml).
+
+
 type Detector struct {
 	Name    string      `yaml:"name"`
 	Markers []string    `yaml:"markers"`
@@ -34,15 +34,15 @@ type Detector struct {
 	Plugins PluginSpec  `yaml:"plugins"`
 }
 
-// Plugin is a single detected plugin/module and its version.
+
 type Plugin struct {
 	Name    string
 	Version string
 	Path    string
 }
 
-// Detect reports whether root contains any of the detector's marker files,
-// i.e. whether this platform appears to be installed at root.
+
+
 func (d *Detector) Detect(root string) bool {
 	for _, marker := range d.Markers {
 		if _, err := os.Stat(filepath.Join(root, marker)); err == nil {
@@ -52,7 +52,7 @@ func (d *Detector) Detect(root string) bool {
 	return false
 }
 
-// CoreVersion extracts the platform's own version string from root.
+
 func (d *Detector) CoreVersion(root string) (string, error) {
 	if d.Version.File == "" {
 		return "", fmt.Errorf("%s: no version file configured", d.Name)
@@ -60,8 +60,8 @@ func (d *Detector) CoreVersion(root string) (string, error) {
 	return extractVersion(filepath.Join(root, d.Version.File), d.Version.Regex)
 }
 
-// DetectPlugins enumerates installed plugins/modules under root, skipping any
-// whose version cannot be determined.
+
+
 func (d *Detector) DetectPlugins(root string) ([]Plugin, error) {
 	if d.Plugins.Glob == "" {
 		return nil, nil

@@ -1,5 +1,3 @@
-
-
 package rozhanitsy
 
 import (
@@ -15,10 +13,7 @@ import (
 	mapset "github.com/deckarep/golang-set/v2"
 )
 
-
-
 const maxComponentsPerRequest = 2000
-
 
 type Component struct {
 	Vendor  string `json:"vendor"`
@@ -46,17 +41,14 @@ func (Component) fromString(str string) (Component, error) {
 	return c, nil
 }
 
-
 type CheckRequest struct {
 	TenantID   string      `json:"tenant_id,omitempty"`
 	Components []Component `json:"components"`
 	MinScore   float64     `json:"min_cvss_score"`
 	Severities []string    `json:"severity,omitempty"`
-	
-	
+
 	Confidence string `json:"confidence"`
 }
-
 
 type Vulnerability struct {
 	Vendor           string  `json:"vendor"`
@@ -69,8 +61,6 @@ type Vulnerability struct {
 	CVSSSeverity     string  `json:"cvss_severity"`
 }
 
-
-
 type UnmatchedComponent struct {
 	Vendor           string `json:"vendor"`
 	Product          string `json:"product"`
@@ -78,14 +68,12 @@ type UnmatchedComponent struct {
 	LocalID          string `json:"local_id"`
 }
 
-
 type CheckResponse struct {
 	TenantID   string               `json:"tenant_id"`
 	Vulnerable []Vulnerability      `json:"vulnerable"`
 	Unmatched  []UnmatchedComponent `json:"unmatched"`
 	CheckedAt  time.Time            `json:"checked_at"`
 }
-
 
 type APIError struct {
 	StatusCode int
@@ -105,14 +93,11 @@ func (e *APIError) Error() string {
 	}
 }
 
-
 type Client struct {
 	BaseURL string
 	Token   string
 	HTTP    *http.Client
 }
-
-
 
 func New(baseURL, token string) *Client {
 	return &Client{
@@ -122,18 +107,14 @@ func New(baseURL, token string) *Client {
 	}
 }
 
-
-
-
-
 func (c *Client) CheckVulns(ctx context.Context, components []Component, minScore float64, severities []string, confidence string) (*CheckResponse, error) {
 	if len(components) == 0 {
 		return &CheckResponse{CheckedAt: time.Now()}, nil
 	}
 
-	componentSet := mapset.NewSet[string]()   
-	inventoryMap := make(map[string][]string) 
-	affectedMap := make(map[string][]string)  
+	componentSet := mapset.NewSet[string]()
+	inventoryMap := make(map[string][]string)
+	affectedMap := make(map[string][]string)
 	for _, c := range components {
 		genericId := c.toGenericString()
 		componentSet.Add(genericId)
@@ -228,4 +209,3 @@ func (c *Client) checkVulnsBatch(ctx context.Context, components []Component, mi
 
 	return &result, nil
 }
-

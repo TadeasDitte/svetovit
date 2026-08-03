@@ -1,5 +1,3 @@
-// Command svetovit scans a local CMS install for its platform and plugin
-// versions, then checks them against a Rozhanitsy server for known CVEs.
 package main
 
 import (
@@ -101,8 +99,6 @@ func run(args []string) int {
 		return 1
 	}
 
-	//	resp.Vulnerable = (report.Filter{MinScore: *minScore, Severities: severities}).Apply(resp.Vulnerable)
-
 	report.Print(os.Stdout, resp, sections)
 
 	outputs := map[string]func(io.Writer) error{}
@@ -129,9 +125,6 @@ func run(args []string) int {
 	return 0
 }
 
-// parseSections validates --confidence and returns both the local report
-// Sections it selects and its normalized form, which is also sent to the
-// API so the server only computes the requested bound/unbound results.
 func parseSections(confidence string) (report.Sections, string, error) {
 	normalized := strings.ToLower(strings.TrimSpace(confidence))
 	if normalized == "" {

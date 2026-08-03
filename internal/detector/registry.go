@@ -8,17 +8,17 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Registry holds the set of loaded detector configs.
+
 type Registry struct {
 	detectors []*Detector
 }
 
-// All returns every loaded detector.
+
 func (r *Registry) All() []*Detector {
 	return r.detectors
 }
 
-// LoadFS loads every *.yml/*.yaml file at the root of fsys as a Detector config.
+
 func LoadFS(fsys fs.FS) (*Registry, error) {
 	entries, err := fs.ReadDir(fsys, ".")
 	if err != nil {
