@@ -1,0 +1,31 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.26.5'
+
+      - name: Build linux/amd64 binary
+        env:
+          GOOS: linux
+          GOARCH: amd64
+        run: go build -o dist/svetovit-linux-amd64 ./cmd/svetovit
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/svetovit-linux-amd64
