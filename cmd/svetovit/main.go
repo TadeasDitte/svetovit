@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joho/godotenv"
 	"github.com/spf13/pflag"
 
 	"github.com/TadeasDitte/Svetovit/detectors"
@@ -22,6 +23,8 @@ func main() {
 }
 
 func run(args []string) int {
+	_ = godotenv.Load() // optional .env in cwd; real env vars still take precedence
+
 	fs := pflag.NewFlagSet("svetovit", pflag.ContinueOnError)
 	target := fs.StringP("target", "t", ".", "path to the CMS install (or tenant directory holding several installs) to scan")
 	depth := fs.IntP("depth", "d", scanner.UnlimitedDepth, "max directory levels below --target to search for CMS installs (0 = target only, 1 = target's immediate subdirectories, ...); default is a full recursive search")
