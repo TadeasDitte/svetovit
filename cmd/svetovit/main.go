@@ -27,10 +27,9 @@ func run(args []string) int {
 	target := fs.String("target", ".", "path to the CMS install (or tenant directory holding several installs) to scan")
 	serverURL := fs.String("server", os.Getenv("ROZHANITSY_URL"), "Rozhanitsy server base URL (env ROZHANITSY_URL)")
 	token := fs.String("token", os.Getenv("SCAN_TOKEN"), "Rozhanitsy scan host bearer token (env SCAN_TOKEN)")
-	tenantID := fs.String("tenant", "", "optional tenant ID to scope the check")
 	timeout := fs.Duration("timeout", 30*time.Second, "HTTP request timeout")
 
-	show := fs.String("show", "all", "which results to report: bound (known-vulnerable), unbound (unmatched), or all")
+	confidence := fs.String("confidence", "all", "which results to report: bound (known-vulnerable), unbound (unmatched), or all")
 	minScore := fs.Float64("min-score", 0, "only report vulnerabilities with CVSS score >= this value")
 	severity := fs.String("severity", "", "comma-separated CVSS severities to report, e.g. critical,high")
 
@@ -51,7 +50,7 @@ func run(args []string) int {
 		return 2
 	}
 
-	sections, err := parseSections(*show)
+	sections, err := parseSections(*confidence)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "svetovit: %v\n", err)
 		return 2
@@ -89,17 +88,18 @@ func run(args []string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout*2)
 	defer cancel()
 
-	resp, err := client.CheckVulns(ctx, *tenantID, apiComponents)
+	var severities []string
+	if *severity != "" {
+		severities = strings.Split(*severity, ",")
+	}
+
+	resp, err := client.CheckVulns(ctx, apiComponents, *minScore, severities)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "svetovit: %v\n", err)
 		return 1
 	}
 
-	var severities []string
-	if *severity != "" {
-		severities = strings.Split(*severity, ",")
-	}
-	resp.Vulnerable = (report.Filter{MinScore: *minScore, Severities: severities}).Apply(resp.Vulnerable)
+	//	resp.Vulnerable = (report.Filter{MinScore: *minScore, Severities: severities}).Apply(resp.Vulnerable)
 
 	report.Print(os.Stdout, resp, sections)
 

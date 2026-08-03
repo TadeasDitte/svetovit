@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	mapset "github.com/deckarep/golang-set/v2"
 )
 
 // maxComponentsPerRequest mirrors the API's validation rule: components is
@@ -25,10 +27,31 @@ type Component struct {
 	LocalID string `json:"local_id,omitempty"`
 }
 
+func (c Component) toGenericString() string {
+	clean := c
+	clean.LocalID = ""
+	b, err := json.Marshal(clean)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+func (Component) fromString(str string) (Component, error) {
+	c := Component{}
+	err := json.Unmarshal([]byte(str), &c)
+	if err != nil {
+		return c, err
+	}
+	return c, nil
+}
+
 // CheckRequest is the body of a POST /api/vulns/check request.
 type CheckRequest struct {
 	TenantID   string      `json:"tenant_id,omitempty"`
 	Components []Component `json:"components"`
+	MinScore   float64     `json:"min_cvss_score"`
+	Severities []string    `json:"severity,omitempty"`
 }
 
 // Vulnerability is a single known CVE affecting an installed component.
@@ -46,9 +69,10 @@ type Vulnerability struct {
 // UnmatchedComponent is a submitted component that could not be resolved
 // against the vulnerability database's product catalog.
 type UnmatchedComponent struct {
-	Vendor  string `json:"vendor"`
-	Product string `json:"product"`
-	LocalID string `json:"local_id"`
+	Vendor           string `json:"vendor"`
+	Product          string `json:"product"`
+	InstalledVersion string `json:"installed_version"`
+	LocalID          string `json:"local_id"`
 }
 
 // CheckResponse is the body of a successful POST /api/vulns/check response.
@@ -95,33 +119,77 @@ func New(baseURL, token string) *Client {
 	}
 }
 
-// CheckVulns submits components (and an optional tenant ID) for a vulnerability
+// CheckVulns submits components for a vulnerability
 // check. Requests are split into batches of at most 2000 components, per the
 // API's validation limit, and results are merged.
-func (c *Client) CheckVulns(ctx context.Context, tenantID string, components []Component) (*CheckResponse, error) {
+func (c *Client) CheckVulns(ctx context.Context, components []Component, minScore float64, severities []string) (*CheckResponse, error) {
 	if len(components) == 0 {
-		return &CheckResponse{TenantID: tenantID, CheckedAt: time.Now()}, nil
+		return &CheckResponse{CheckedAt: time.Now()}, nil
 	}
 
-	merged := &CheckResponse{TenantID: tenantID}
-	for start := 0; start < len(components); start += maxComponentsPerRequest {
-		end := min(start+maxComponentsPerRequest, len(components))
+	componentSet := mapset.NewSet[string]()   // deduplicated components by version
+	inventoryMap := make(map[string][]string) // site/local_id -> installed components
+	affectedMap := make(map[string][]string)  // versioned component -> sites
+	for _, c := range components {
+		genericId := c.toGenericString()
+		componentSet.Add(genericId)
+		inventoryMap[c.LocalID] = append(inventoryMap[c.LocalID], genericId)
+		affectedMap[genericId] = append(affectedMap[genericId], c.LocalID)
+	}
 
-		batch, err := c.checkVulnsBatch(ctx, tenantID, components[start:end])
+	merged := &CheckResponse{}
+	for start := 0; start < componentSet.Cardinality(); start += maxComponentsPerRequest {
+		end := min(start+maxComponentsPerRequest, componentSet.Cardinality())
+		slice := componentSet.ToSlice()[start:end]
+
+		genericComponents := make([]Component, 0)
+
+		for _, c := range slice {
+			component, err := Component.fromString(Component{}, c)
+			if err != nil {
+				continue
+			}
+			genericComponents = append(genericComponents, component)
+		}
+
+		batch, err := c.checkVulnsBatch(ctx, genericComponents, minScore, severities)
 		if err != nil {
 			return nil, err
 		}
 
-		merged.Vulnerable = append(merged.Vulnerable, batch.Vulnerable...)
-		merged.Unmatched = append(merged.Unmatched, batch.Unmatched...)
+		newVulns := make([]Vulnerability, 0)
+		newUnmatched := make([]UnmatchedComponent, 0)
+
+		for _, vuln := range batch.Vulnerable {
+			c := Component{
+				Vendor:  vuln.Vendor,
+				Product: vuln.Product,
+				Version: vuln.InstalledVersion,
+			}
+			vuln.LocalID = strings.Join(affectedMap[c.toGenericString()], ",")
+			newVulns = append(newVulns, vuln)
+		}
+
+		for _, unm := range batch.Unmatched {
+			c := Component{
+				Vendor:  unm.Vendor,
+				Product: unm.Product,
+				Version: unm.InstalledVersion,
+			}
+			unm.LocalID = strings.Join(affectedMap[c.toGenericString()], ",")
+			newUnmatched = append(newUnmatched, unm)
+		}
+
+		merged.Vulnerable = append(merged.Vulnerable, newVulns...)
+		merged.Unmatched = append(merged.Unmatched, newUnmatched...)
 		merged.CheckedAt = batch.CheckedAt
 	}
 
 	return merged, nil
 }
 
-func (c *Client) checkVulnsBatch(ctx context.Context, tenantID string, components []Component) (*CheckResponse, error) {
-	reqBody, err := json.Marshal(CheckRequest{TenantID: tenantID, Components: components})
+func (c *Client) checkVulnsBatch(ctx context.Context, components []Component, minScore float64, severities []string) (*CheckResponse, error) {
+	reqBody, err := json.Marshal(CheckRequest{Components: components, MinScore: minScore, Severities: severities})
 	if err != nil {
 		return nil, fmt.Errorf("rozhanitsy: encoding request: %w", err)
 	}
@@ -156,3 +224,4 @@ func (c *Client) checkVulnsBatch(ctx context.Context, tenantID string, component
 
 	return &result, nil
 }
+
