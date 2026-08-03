@@ -2,8 +2,7 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: ["main"]
 
 permissions:
   contents: write
@@ -25,7 +24,13 @@ jobs:
           GOARCH: amd64
         run: go build -o dist/svetovit-linux-amd64 ./cmd/svetovit
 
+      - name: Set release tag
+        id: vars
+        run: echo "tag=build-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.vars.outputs.tag }}
+          name: ${{ steps.vars.outputs.tag }}
           files: dist/svetovit-linux-amd64
