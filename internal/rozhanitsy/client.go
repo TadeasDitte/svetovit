@@ -1,5 +1,5 @@
-// Package rozhanitsy is a client for the Rozhanitsy vulnerability intelligence
-// API (https://github.com/TadeasDitte/Rozhanitsy/wiki/API).
+
+
 package rozhanitsy
 
 import (
@@ -15,11 +15,11 @@ import (
 	mapset "github.com/deckarep/golang-set/v2"
 )
 
-// maxComponentsPerRequest mirrors the API's validation rule: components is
-// required, 1-2000 entries.
+
+
 const maxComponentsPerRequest = 2000
 
-// Component is a single vendor/product/version to check for known vulnerabilities.
+
 type Component struct {
 	Vendor  string `json:"vendor"`
 	Product string `json:"product"`
@@ -46,18 +46,18 @@ func (Component) fromString(str string) (Component, error) {
 	return c, nil
 }
 
-// CheckRequest is the body of a POST /api/vulns/check request.
+
 type CheckRequest struct {
 	TenantID   string      `json:"tenant_id,omitempty"`
 	Components []Component `json:"components"`
 	MinScore   float64     `json:"min_cvss_score"`
 	Severities []string    `json:"severity,omitempty"`
-	// Confidence tells the server which results to compute: "bound"
-	// (known-vulnerable), "unbound" (unmatched), or "all".
+	
+	
 	Confidence string `json:"confidence"`
 }
 
-// Vulnerability is a single known CVE affecting an installed component.
+
 type Vulnerability struct {
 	Vendor           string  `json:"vendor"`
 	Product          string  `json:"product"`
@@ -69,8 +69,8 @@ type Vulnerability struct {
 	CVSSSeverity     string  `json:"cvss_severity"`
 }
 
-// UnmatchedComponent is a submitted component that could not be resolved
-// against the vulnerability database's product catalog.
+
+
 type UnmatchedComponent struct {
 	Vendor           string `json:"vendor"`
 	Product          string `json:"product"`
@@ -78,7 +78,7 @@ type UnmatchedComponent struct {
 	LocalID          string `json:"local_id"`
 }
 
-// CheckResponse is the body of a successful POST /api/vulns/check response.
+
 type CheckResponse struct {
 	TenantID   string               `json:"tenant_id"`
 	Vulnerable []Vulnerability      `json:"vulnerable"`
@@ -86,7 +86,7 @@ type CheckResponse struct {
 	CheckedAt  time.Time            `json:"checked_at"`
 }
 
-// APIError is returned for any non-2xx response from the API.
+
 type APIError struct {
 	StatusCode int
 	Body       string
@@ -105,15 +105,15 @@ func (e *APIError) Error() string {
 	}
 }
 
-// Client talks to a Rozhanitsy instance's scanner API.
+
 type Client struct {
 	BaseURL string
 	Token   string
 	HTTP    *http.Client
 }
 
-// New creates a Client for the given Rozhanitsy base URL, authenticating with
-// a Sanctum bearer token issued via `scan-host:create` or the web UI.
+
+
 func New(baseURL, token string) *Client {
 	return &Client{
 		BaseURL: strings.TrimRight(baseURL, "/"),
@@ -122,18 +122,18 @@ func New(baseURL, token string) *Client {
 	}
 }
 
-// CheckVulns submits components for a vulnerability
-// check. Requests are split into batches of at most 2000 components, per the
-// API's validation limit, and results are merged. confidence selects which
-// results the server computes: "bound", "unbound", or "all".
+
+
+
+
 func (c *Client) CheckVulns(ctx context.Context, components []Component, minScore float64, severities []string, confidence string) (*CheckResponse, error) {
 	if len(components) == 0 {
 		return &CheckResponse{CheckedAt: time.Now()}, nil
 	}
 
-	componentSet := mapset.NewSet[string]()   // deduplicated components by version
-	inventoryMap := make(map[string][]string) // site/local_id -> installed components
-	affectedMap := make(map[string][]string)  // versioned component -> sites
+	componentSet := mapset.NewSet[string]()   
+	inventoryMap := make(map[string][]string) 
+	affectedMap := make(map[string][]string)  
 	for _, c := range components {
 		genericId := c.toGenericString()
 		componentSet.Add(genericId)
