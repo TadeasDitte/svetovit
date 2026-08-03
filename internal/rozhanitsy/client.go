@@ -52,6 +52,9 @@ type CheckRequest struct {
 	Components []Component `json:"components"`
 	MinScore   float64     `json:"min_cvss_score"`
 	Severities []string    `json:"severity,omitempty"`
+	// Confidence tells the server which results to compute: "bound"
+	// (known-vulnerable), "unbound" (unmatched), or "all".
+	Confidence string `json:"confidence"`
 }
 
 // Vulnerability is a single known CVE affecting an installed component.
@@ -121,8 +124,9 @@ func New(baseURL, token string) *Client {
 
 // CheckVulns submits components for a vulnerability
 // check. Requests are split into batches of at most 2000 components, per the
-// API's validation limit, and results are merged.
-func (c *Client) CheckVulns(ctx context.Context, components []Component, minScore float64, severities []string) (*CheckResponse, error) {
+// API's validation limit, and results are merged. confidence selects which
+// results the server computes: "bound", "unbound", or "all".
+func (c *Client) CheckVulns(ctx context.Context, components []Component, minScore float64, severities []string, confidence string) (*CheckResponse, error) {
 	if len(components) == 0 {
 		return &CheckResponse{CheckedAt: time.Now()}, nil
 	}
@@ -152,7 +156,7 @@ func (c *Client) CheckVulns(ctx context.Context, components []Component, minScor
 			genericComponents = append(genericComponents, component)
 		}
 
-		batch, err := c.checkVulnsBatch(ctx, genericComponents, minScore, severities)
+		batch, err := c.checkVulnsBatch(ctx, genericComponents, minScore, severities, confidence)
 		if err != nil {
 			return nil, err
 		}
@@ -188,8 +192,8 @@ func (c *Client) CheckVulns(ctx context.Context, components []Component, minScor
 	return merged, nil
 }
 
-func (c *Client) checkVulnsBatch(ctx context.Context, components []Component, minScore float64, severities []string) (*CheckResponse, error) {
-	reqBody, err := json.Marshal(CheckRequest{Components: components, MinScore: minScore, Severities: severities})
+func (c *Client) checkVulnsBatch(ctx context.Context, components []Component, minScore float64, severities []string, confidence string) (*CheckResponse, error) {
+	reqBody, err := json.Marshal(CheckRequest{Components: components, MinScore: minScore, Severities: severities, Confidence: confidence})
 	if err != nil {
 		return nil, fmt.Errorf("rozhanitsy: encoding request: %w", err)
 	}

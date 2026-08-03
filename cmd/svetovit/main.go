@@ -25,6 +25,7 @@ func main() {
 func run(args []string) int {
 	fs := flag.NewFlagSet("svetovit", flag.ContinueOnError)
 	target := fs.String("target", ".", "path to the CMS install (or tenant directory holding several installs) to scan")
+	depth := fs.Int("depth", scanner.UnlimitedDepth, "max directory levels below -target to search for CMS installs (0 = target only, 1 = target's immediate subdirectories, ...); default is a full recursive search")
 	serverURL := fs.String("server", os.Getenv("ROZHANITSY_URL"), "Rozhanitsy server base URL (env ROZHANITSY_URL)")
 	token := fs.String("token", os.Getenv("SCAN_TOKEN"), "Rozhanitsy scan host bearer token (env SCAN_TOKEN)")
 	timeout := fs.Duration("timeout", 30*time.Second, "HTTP request timeout")
@@ -50,7 +51,7 @@ func run(args []string) int {
 		return 2
 	}
 
-	sections, err := parseSections(*confidence)
+	sections, confidenceParam, err := parseSections(*confidence)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "svetovit: %v\n", err)
 		return 2
@@ -62,7 +63,7 @@ func run(args []string) int {
 		return 1
 	}
 
-	components, err := scanner.New(registry).Scan(*target)
+	components, err := scanner.New(registry, *depth).Scan(*target)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "svetovit: scanning %s: %v\n", *target, err)
 		return 1
@@ -93,7 +94,7 @@ func run(args []string) int {
 		severities = strings.Split(*severity, ",")
 	}
 
-	resp, err := client.CheckVulns(ctx, apiComponents, *minScore, severities)
+	resp, err := client.CheckVulns(ctx, apiComponents, *minScore, severities, confidenceParam)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "svetovit: %v\n", err)
 		return 1
@@ -127,16 +128,23 @@ func run(args []string) int {
 	return 0
 }
 
-func parseSections(show string) (report.Sections, error) {
-	switch strings.ToLower(strings.TrimSpace(show)) {
+// parseSections validates -confidence and returns both the local report
+// Sections it selects and its normalized form, which is also sent to the
+// API so the server only computes the requested bound/unbound results.
+func parseSections(confidence string) (report.Sections, string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(confidence))
+	if normalized == "" {
+		normalized = "all"
+	}
+	switch normalized {
 	case "bound":
-		return report.Sections{Bound: true}, nil
+		return report.Sections{Bound: true}, normalized, nil
 	case "unbound":
-		return report.Sections{Unbound: true}, nil
-	case "all", "":
-		return report.Sections{Bound: true, Unbound: true}, nil
+		return report.Sections{Unbound: true}, normalized, nil
+	case "all":
+		return report.Sections{Bound: true, Unbound: true}, normalized, nil
 	default:
-		return report.Sections{}, fmt.Errorf("invalid -show value %q (want bound, unbound, or all)", show)
+		return report.Sections{}, "", fmt.Errorf("invalid -confidence value %q (want bound, unbound, or all)", confidence)
 	}
 }
 
