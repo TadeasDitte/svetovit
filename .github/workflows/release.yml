@@ -22,6 +22,7 @@ jobs:
         env:
           GOOS: linux
           GOARCH: amd64
+          CGO_ENABLED: 0
         run: go build -o dist/svetovit-linux-amd64 ./cmd/svetovit
 
       - name: Set release tag
