@@ -29,7 +29,7 @@ func run(args []string) int {
 	token := fs.String("token", os.Getenv("SCAN_TOKEN"), "Rozhanitsy scan host bearer token (env SCAN_TOKEN)")
 	timeout := fs.Duration("timeout", 30*time.Second, "HTTP request timeout")
 
-	confidence := fs.StringP("confidence", "c", "all", "which results to report: bound (known-vulnerable), unbound (unmatched), or all")
+	confidence := fs.StringP("confidence", "c", "all", "which results to report: bounded (known-vulnerable), unbound (unmatched), or all")
 	minScore := fs.Float64P("min-score", "m", 0, "only report vulnerabilities with CVSS score >= this value")
 	severity := fs.String("severity", "", "comma-separated CVSS severities to report, e.g. critical,high")
 
@@ -50,7 +50,7 @@ func run(args []string) int {
 		return 2
 	}
 
-	sections, confidenceParam, err := parseSections(*confidence)
+	sections, confidenceMode, err := parseSections(*confidence)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "svetovit: %v\n", err)
 		return 2
@@ -93,7 +93,7 @@ func run(args []string) int {
 		severities = strings.Split(*severity, ",")
 	}
 
-	resp, err := client.CheckVulns(ctx, apiComponents, *minScore, severities, confidenceParam)
+	resp, err := client.CheckVulns(ctx, apiComponents, *minScore, severities, apiConfidence(confidenceMode))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "svetovit: %v\n", err)
 		return 1
@@ -131,15 +131,26 @@ func parseSections(confidence string) (report.Sections, string, error) {
 		normalized = "all"
 	}
 	switch normalized {
-	case "bound":
-		return report.Sections{Bound: true}, normalized, nil
+	case "bounded":
+		return report.Sections{Bounded: true}, normalized, nil
 	case "unbound":
 		return report.Sections{Unbound: true}, normalized, nil
 	case "all":
-		return report.Sections{Bound: true, Unbound: true}, normalized, nil
+		return report.Sections{Bounded: true, Unbound: true}, normalized, nil
 	default:
-		return report.Sections{}, "", fmt.Errorf("invalid --confidence value %q (want bound, unbound, or all)", confidence)
+		return report.Sections{}, "", fmt.Errorf("invalid --confidence value %q (want bounded, unbound, or all)", confidence)
 	}
+}
+
+
+
+
+
+func apiConfidence(mode string) string {
+	if mode == "bounded" {
+		return "bounded"
+	}
+	return "all"
 }
 
 func writeReportFile(path string, write func(io.Writer) error) error {

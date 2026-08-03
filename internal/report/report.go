@@ -20,7 +20,7 @@ var severityRank = map[string]int{
 }
 
 type Sections struct {
-	Bound   bool
+	Bounded bool
 	Unbound bool
 }
 
@@ -55,12 +55,12 @@ func (f Filter) Apply(vulns []rozhanitsy.Vulnerability) []rozhanitsy.Vulnerabili
 func Print(w io.Writer, resp *rozhanitsy.CheckResponse, sections Sections) {
 	fmt.Fprintf(w, "Scan checked at %s\n\n", resp.CheckedAt.Format(time.RFC3339))
 
-	if sections.Bound {
+	if sections.Bounded {
 		printVulnerable(w, resp.Vulnerable)
 	}
 
 	if sections.Unbound {
-		if sections.Bound {
+		if sections.Bounded {
 			fmt.Fprintln(w)
 		}
 		printUnmatched(w, resp.Unmatched)
@@ -108,7 +108,7 @@ func printUnmatched(w io.Writer, unmatched []rozhanitsy.UnmatchedComponent) {
 
 func WriteJSON(w io.Writer, resp *rozhanitsy.CheckResponse, sections Sections) error {
 	out := *resp
-	if !sections.Bound {
+	if !sections.Bounded {
 		out.Vulnerable = nil
 	}
 	if !sections.Unbound {
