@@ -1,0 +1,10 @@
+name: drupal
+markers:
+- core/lib/Drupal.php
+version:
+  file: core/lib/Drupal.php
+  regex: 'const VERSION\s*=\s*[''"]([^''"]+)[''"]'
+plugins:
+  glob: "modules/*/*"
+  version_file: "module.info.yml"
+  version_regex: 'version:\s*([0-9.]+)'

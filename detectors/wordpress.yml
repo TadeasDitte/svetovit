@@ -1,0 +1,12 @@
+name: wordpress
+markers:
+- wp-load.php
+- wp-includes/version.php
+version:
+  file: wp-includes/version.php
+  regex: '\$wp_version\s*=\s*[''"]([^''"]+)[''"]'
+
+plugins:
+  glob: "wp-content/plugins/*"
+  version_file: "readme.txt"
+  version_regex: 'Stable tag:\s*([0-9.]+)'
