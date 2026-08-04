@@ -40,7 +40,11 @@ func run(args []string) int {
 	outJSON := fs.String("oJ", "", "also write a JSON report to this file")
 	outAll := fs.String("oA", "", "also write the report to <basename>.txt and <basename>.json")
 
+	byLocations := fs.BoolP("per-location", "l", false, "show report per location")
+	format := fs.StringP("format", "f", "normal", "format output as json or quiet. quiet shows only errors")
+
 	if err := fs.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "svetovit: %v\n", err)
 		return 2
 	}
 
@@ -102,18 +106,28 @@ func run(args []string) int {
 		return 1
 	}
 
-	report.Print(os.Stdout, resp, sections)
+	switch strings.ToLower(strings.TrimSpace(*format)) {
+	case "", "normal":
+		report.Print(os.Stdout, resp, sections, *byLocations)
+	case "json":
+		report.WriteJSON(os.Stdout, resp, sections, *byLocations)
+	case "quiet":
+		// nothing
+	default:
+		fmt.Fprintf(os.Stderr, "svetovit: invalid --format value %v (normal, json or quiet)\n", *format)
+		os.Exit(2)
+	}
 
 	outputs := map[string]func(io.Writer) error{}
 	if *outNormal != "" {
-		outputs[*outNormal] = func(w io.Writer) error { report.Print(w, resp, sections); return nil }
+		outputs[*outNormal] = func(w io.Writer) error { report.Print(w, resp, sections, *byLocations); return nil }
 	}
 	if *outJSON != "" {
-		outputs[*outJSON] = func(w io.Writer) error { return report.WriteJSON(w, resp, sections) }
+		outputs[*outJSON] = func(w io.Writer) error { return report.WriteJSON(w, resp, sections, *byLocations) }
 	}
 	if *outAll != "" {
-		outputs[*outAll+".txt"] = func(w io.Writer) error { report.Print(w, resp, sections); return nil }
-		outputs[*outAll+".json"] = func(w io.Writer) error { return report.WriteJSON(w, resp, sections) }
+		outputs[*outAll+".txt"] = func(w io.Writer) error { report.Print(w, resp, sections, *byLocations); return nil }
+		outputs[*outAll+".json"] = func(w io.Writer) error { return report.WriteJSON(w, resp, sections, *byLocations) }
 	}
 	for path, write := range outputs {
 		if err := writeReportFile(path, write); err != nil {
@@ -144,10 +158,6 @@ func parseSections(confidence string) (report.Sections, string, error) {
 		return report.Sections{}, "", fmt.Errorf("invalid --confidence value %q (want bounded, unbound, or all)", confidence)
 	}
 }
-
-
-
-
 
 func apiConfidence(mode string) string {
 	if mode == "bounded" {

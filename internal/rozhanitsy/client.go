@@ -15,6 +15,8 @@ import (
 
 const maxComponentsPerRequest = 2000
 
+const keySep = "\x1f"
+
 type Component struct {
 	Vendor  string `json:"vendor"`
 	Product string `json:"product"`
@@ -22,23 +24,20 @@ type Component struct {
 	LocalID string `json:"local_id,omitempty"`
 }
 
-func (c Component) toGenericString() string {
-	clean := c
-	clean.LocalID = ""
-	b, err := json.Marshal(clean)
-	if err != nil {
-		return ""
-	}
-	return string(b)
+func componentKey(vendor, product, version string) string {
+	return vendor + keySep + product + keySep + version
 }
 
-func (Component) fromString(str string) (Component, error) {
-	c := Component{}
-	err := json.Unmarshal([]byte(str), &c)
-	if err != nil {
-		return c, err
+func parseComponentKey(key string) (Component, error) {
+	parts := strings.Split(key, keySep)
+	if len(parts) != 3 {
+		return Component{}, fmt.Errorf("rozhanitsy: invalid component key: %q", key)
 	}
-	return c, nil
+	return Component{
+		Vendor:  parts[0],
+		Product: parts[1],
+		Version: parts[2],
+	}, nil
 }
 
 type CheckRequest struct {
@@ -46,14 +45,13 @@ type CheckRequest struct {
 	Components []Component `json:"components"`
 	MinScore   float64     `json:"min_cvss_score"`
 	Severities []string    `json:"severity,omitempty"`
-
-	Confidence string `json:"confidence"`
+	Confidence string      `json:"confidence"`
 }
 
 type Vulnerability struct {
 	Vendor           string  `json:"vendor"`
 	Product          string  `json:"product"`
-	LocalID          string  `json:"local_id"`
+	LocalID          string  `json:"local_id,omitempty"`
 	InstalledVersion string  `json:"installed_version"`
 	CVEID            string  `json:"cve_id"`
 	CVSSScore        float64 `json:"cvss_score"`
@@ -65,14 +63,28 @@ type UnmatchedComponent struct {
 	Vendor           string `json:"vendor"`
 	Product          string `json:"product"`
 	InstalledVersion string `json:"installed_version"`
-	LocalID          string `json:"local_id"`
+	LocalID          string `json:"local_id,omitempty"`
+}
+
+type LocationReport struct {
+	Vulnerable []Vulnerability      `json:"vulnerable,omitempty"`
+	Unmatched  []UnmatchedComponent `json:"unmatched,omitempty"`
 }
 
 type CheckResponse struct {
-	TenantID   string               `json:"tenant_id"`
-	Vulnerable []Vulnerability      `json:"vulnerable"`
-	Unmatched  []UnmatchedComponent `json:"unmatched"`
-	CheckedAt  time.Time            `json:"checked_at"`
+	Vulnerable []Vulnerability            `json:"vulnerable"`
+	Unmatched  []UnmatchedComponent       `json:"unmatched"`
+	CheckedAt  time.Time                  `json:"checked_at"`
+	ByLocation map[string]*LocationReport `json:"by_location,omitempty"`
+}
+
+func (r *CheckResponse) locationEntry(loc string) *LocationReport {
+	entry, ok := r.ByLocation[loc]
+	if !ok {
+		entry = &LocationReport{}
+		r.ByLocation[loc] = entry
+	}
+	return entry
 }
 
 type APIError struct {
@@ -109,28 +121,29 @@ func New(baseURL, token string) *Client {
 
 func (c *Client) CheckVulns(ctx context.Context, components []Component, minScore float64, severities []string, confidence string) (*CheckResponse, error) {
 	if len(components) == 0 {
-		return &CheckResponse{CheckedAt: time.Now()}, nil
+		return &CheckResponse{CheckedAt: time.Now(), ByLocation: make(map[string]*LocationReport)}, nil
 	}
 
 	componentSet := mapset.NewSet[string]()
-	inventoryMap := make(map[string][]string)
 	affectedMap := make(map[string][]string)
-	for _, c := range components {
-		genericId := c.toGenericString()
-		componentSet.Add(genericId)
-		inventoryMap[c.LocalID] = append(inventoryMap[c.LocalID], genericId)
-		affectedMap[genericId] = append(affectedMap[genericId], c.LocalID)
+	for _, comp := range components {
+		genericID := componentKey(comp.Vendor, comp.Product, comp.Version)
+		componentSet.Add(genericID)
+		affectedMap[genericID] = append(affectedMap[genericID], comp.LocalID)
 	}
 
-	merged := &CheckResponse{}
-	for start := 0; start < componentSet.Cardinality(); start += maxComponentsPerRequest {
-		end := min(start+maxComponentsPerRequest, componentSet.Cardinality())
-		slice := componentSet.ToSlice()[start:end]
+	allGeneric := componentSet.ToSlice()
+	total := len(allGeneric)
 
-		genericComponents := make([]Component, 0)
+	merged := &CheckResponse{ByLocation: make(map[string]*LocationReport)}
 
-		for _, c := range slice {
-			component, err := Component.fromString(Component{}, c)
+	for start := 0; start < total; start += maxComponentsPerRequest {
+		end := min(start+maxComponentsPerRequest, total)
+		slice := allGeneric[start:end]
+
+		genericComponents := make([]Component, 0, len(slice))
+		for _, s := range slice {
+			component, err := parseComponentKey(s)
 			if err != nil {
 				continue
 			}
@@ -142,27 +155,28 @@ func (c *Client) CheckVulns(ctx context.Context, components []Component, minScor
 			return nil, err
 		}
 
-		newVulns := make([]Vulnerability, 0)
-		newUnmatched := make([]UnmatchedComponent, 0)
+		newVulns := make([]Vulnerability, 0, len(batch.Vulnerable))
+		newUnmatched := make([]UnmatchedComponent, 0, len(batch.Unmatched))
 
 		for _, vuln := range batch.Vulnerable {
-			c := Component{
-				Vendor:  vuln.Vendor,
-				Product: vuln.Product,
-				Version: vuln.InstalledVersion,
-			}
-			vuln.LocalID = strings.Join(affectedMap[c.toGenericString()], ",")
+			key := componentKey(vuln.Vendor, vuln.Product, vuln.InstalledVersion)
+			locs := affectedMap[key]
+			vuln.LocalID = strings.Join(locs, ",")
 			newVulns = append(newVulns, vuln)
-		}
-
-		for _, unm := range batch.Unmatched {
-			c := Component{
-				Vendor:  unm.Vendor,
-				Product: unm.Product,
-				Version: unm.InstalledVersion,
+			for _, loc := range locs {
+				entry := merged.locationEntry(loc)
+				entry.Vulnerable = append(entry.Vulnerable, vuln)
 			}
-			unm.LocalID = strings.Join(affectedMap[c.toGenericString()], ",")
+		}
+		for _, unm := range batch.Unmatched {
+			key := componentKey(unm.Vendor, unm.Product, unm.InstalledVersion)
+			locs := affectedMap[key]
+			unm.LocalID = strings.Join(locs, ",")
 			newUnmatched = append(newUnmatched, unm)
+			for _, loc := range locs {
+				entry := merged.locationEntry(loc)
+				entry.Unmatched = append(entry.Unmatched, unm)
+			}
 		}
 
 		merged.Vulnerable = append(merged.Vulnerable, newVulns...)
@@ -203,6 +217,7 @@ func (c *Client) checkVulnsBatch(ctx context.Context, components []Component, mi
 	}
 
 	var result CheckResponse
+	result.ByLocation = make(map[string]*LocationReport)
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("rozhanitsy: decoding response: %w", err)
 	}
