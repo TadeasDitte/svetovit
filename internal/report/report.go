@@ -52,22 +52,40 @@ func (f Filter) Apply(vulns []rozhanitsy.Vulnerability) []rozhanitsy.Vulnerabili
 	return out
 }
 
-func Print(w io.Writer, resp *rozhanitsy.CheckResponse, sections Sections) {
+func Print(w io.Writer, resp *rozhanitsy.CheckResponse, sections Sections, byLocations bool) {
 	fmt.Fprintf(w, "Scan checked at %s\n\n", resp.CheckedAt.Format(time.RFC3339))
 
-	if sections.Bounded {
-		printVulnerable(w, resp.Vulnerable)
-	}
+	if byLocations {
+		for path, loc := range resp.ByLocation {
+			fmt.Fprintf(w, "Location: %s\n", path)
+			if sections.Bounded {
+				printVulnerable(w, loc.Vulnerable, true)
+			}
 
-	if sections.Unbound {
-		if sections.Bounded {
+			if sections.Unbound {
+				if sections.Bounded {
+					fmt.Fprintln(w)
+				}
+				printUnmatched(w, loc.Unmatched)
+			}
+
 			fmt.Fprintln(w)
 		}
-		printUnmatched(w, resp.Unmatched)
+	} else {
+		if sections.Bounded {
+			printVulnerable(w, resp.Vulnerable, false)
+		}
+
+		if sections.Unbound {
+			if sections.Bounded {
+				fmt.Fprintln(w)
+			}
+			printUnmatched(w, resp.Unmatched)
+		}
 	}
 }
 
-func printVulnerable(w io.Writer, vulnerable []rozhanitsy.Vulnerability) {
+func printVulnerable(w io.Writer, vulnerable []rozhanitsy.Vulnerability, omitLocation bool) {
 	if len(vulnerable) == 0 {
 		fmt.Fprintln(w, "No known vulnerabilities found (matching current filters).")
 		return
@@ -85,10 +103,18 @@ func printVulnerable(w io.Writer, vulnerable []rozhanitsy.Vulnerability) {
 	fmt.Fprintf(w, "%d known vulnerabilit%s found:\n\n", len(vulns), plural(len(vulns)))
 
 	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "SEVERITY\tCVSS\tPRODUCT\tVERSION\tCVE\tLOCATION")
-	for _, v := range vulns {
-		fmt.Fprintf(tw, "%s\t%.1f\t%s\t%s\t%s\t%s\n",
-			v.CVSSSeverity, v.CVSSScore, v.Product, v.InstalledVersion, v.CVEID, v.LocalID)
+	if omitLocation {
+		fmt.Fprintln(tw, "SEVERITY\tCVSS\tPRODUCT\tVERSION\tCVE")
+		for _, v := range vulns {
+			fmt.Fprintf(tw, "%s\t%.1f\t%s\t%s\t%s\n",
+				v.CVSSSeverity, v.CVSSScore, v.Product, v.InstalledVersion, v.CVEID)
+		}
+	} else {
+		fmt.Fprintln(tw, "SEVERITY\tCVSS\tPRODUCT\tVERSION\tCVE\tLOCATION(S)")
+		for _, v := range vulns {
+			fmt.Fprintf(tw, "%s\t%.1f\t%s\t%s\t%s\t%s\n",
+				v.CVSSSeverity, v.CVSSScore, v.Product, v.InstalledVersion, v.CVEID, v.LocalID)
+		}
 	}
 	tw.Flush()
 }
@@ -106,13 +132,32 @@ func printUnmatched(w io.Writer, unmatched []rozhanitsy.UnmatchedComponent) {
 	}
 }
 
-func WriteJSON(w io.Writer, resp *rozhanitsy.CheckResponse, sections Sections) error {
+func WriteJSON(w io.Writer, resp *rozhanitsy.CheckResponse, sections Sections, byLocations bool) error {
 	out := *resp
-	if !sections.Bounded {
+	if byLocations {
 		out.Vulnerable = nil
-	}
-	if !sections.Unbound {
 		out.Unmatched = nil
+
+		filtered := make(map[string]*rozhanitsy.LocationReport, len(out.ByLocation))
+		for loc, report := range out.ByLocation {
+			r := *report
+			if !sections.Bounded {
+				r.Vulnerable = nil
+			}
+			if !sections.Unbound {
+				r.Unmatched = nil
+			}
+			filtered[loc] = &r
+		}
+		out.ByLocation = filtered
+	} else {
+		out.ByLocation = nil
+		if !sections.Bounded {
+			out.Vulnerable = nil
+		}
+		if !sections.Unbound {
+			out.Unmatched = nil
+		}
 	}
 
 	enc := json.NewEncoder(w)
