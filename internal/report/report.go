@@ -55,33 +55,27 @@ func (f Filter) Apply(vulns []rozhanitsy.Vulnerability) []rozhanitsy.Vulnerabili
 func Print(w io.Writer, resp *rozhanitsy.CheckResponse, sections Sections, byLocations bool) {
 	fmt.Fprintf(w, "Scan checked at %s\n\n", resp.CheckedAt.Format(time.RFC3339))
 
-	if byLocations {
-		for path, loc := range resp.ByLocation {
-			fmt.Fprintf(w, "Location: %s\n", path)
-			if sections.Bounded {
-				printVulnerable(w, loc.Vulnerable, true)
-			}
+	if !byLocations {
+		printSections(w, resp.Vulnerable, resp.Unmatched, sections, false)
+		return
+	}
 
-			if sections.Unbound {
-				if sections.Bounded {
-					fmt.Fprintln(w)
-				}
-				printUnmatched(w, loc.Unmatched)
-			}
+	for path, loc := range resp.ByLocation {
+		fmt.Fprintf(w, "Location: %s\n", path)
+		printSections(w, loc.Vulnerable, loc.Unmatched, sections, true)
+		fmt.Fprintln(w)
+	}
+}
 
+func printSections(w io.Writer, vulnerable []rozhanitsy.Vulnerability, unmatched []rozhanitsy.UnmatchedComponent, sections Sections, omitLocation bool) {
+	if sections.Bounded {
+		printVulnerable(w, vulnerable, omitLocation)
+	}
+	if sections.Unbound {
+		if sections.Bounded {
 			fmt.Fprintln(w)
 		}
-	} else {
-		if sections.Bounded {
-			printVulnerable(w, resp.Vulnerable, false)
-		}
-
-		if sections.Unbound {
-			if sections.Bounded {
-				fmt.Fprintln(w)
-			}
-			printUnmatched(w, resp.Unmatched)
-		}
+		printUnmatched(w, unmatched)
 	}
 }
 
@@ -134,35 +128,38 @@ func printUnmatched(w io.Writer, unmatched []rozhanitsy.UnmatchedComponent) {
 
 func WriteJSON(w io.Writer, resp *rozhanitsy.CheckResponse, sections Sections, byLocations bool) error {
 	out := *resp
-	if byLocations {
+	if !byLocations {
+		out.ByLocation = nil
+		out.Vulnerable, out.Unmatched = filterSections(out.Vulnerable, out.Unmatched, sections)
+	} else {
 		out.Vulnerable = nil
 		out.Unmatched = nil
-
-		filtered := make(map[string]*rozhanitsy.LocationReport, len(out.ByLocation))
-		for loc, report := range out.ByLocation {
-			r := *report
-			if !sections.Bounded {
-				r.Vulnerable = nil
-			}
-			if !sections.Unbound {
-				r.Unmatched = nil
-			}
-			filtered[loc] = &r
-		}
-		out.ByLocation = filtered
-	} else {
-		out.ByLocation = nil
-		if !sections.Bounded {
-			out.Vulnerable = nil
-		}
-		if !sections.Unbound {
-			out.Unmatched = nil
-		}
+		out.ByLocation = filterByLocation(out.ByLocation, sections)
 	}
 
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
+}
+
+func filterSections(vulnerable []rozhanitsy.Vulnerability, unmatched []rozhanitsy.UnmatchedComponent, sections Sections) ([]rozhanitsy.Vulnerability, []rozhanitsy.UnmatchedComponent) {
+	if !sections.Bounded {
+		vulnerable = nil
+	}
+	if !sections.Unbound {
+		unmatched = nil
+	}
+	return vulnerable, unmatched
+}
+
+func filterByLocation(byLocation map[string]*rozhanitsy.LocationReport, sections Sections) map[string]*rozhanitsy.LocationReport {
+	filtered := make(map[string]*rozhanitsy.LocationReport, len(byLocation))
+	for loc, rep := range byLocation {
+		r := *rep
+		r.Vulnerable, r.Unmatched = filterSections(r.Vulnerable, r.Unmatched, sections)
+		filtered[loc] = &r
+	}
+	return filtered
 }
 
 func plural(n int) string {
