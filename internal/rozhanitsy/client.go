@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	mapset "github.com/deckarep/golang-set/v2"
 )
 
 const maxComponentsPerRequest = 2000
@@ -122,77 +124,67 @@ func (c *Client) CheckVulns(ctx context.Context, components []Component, minScor
 		return &CheckResponse{CheckedAt: time.Now(), ByLocation: make(map[string]*LocationReport)}, nil
 	}
 
-	affectedMap := groupByGenericComponent(components)
-	allGeneric := genericKeys(affectedMap)
+	componentSet := mapset.NewSet[string]()
+	affectedMap := make(map[string][]string)
+	for _, comp := range components {
+		genericID := componentKey(comp.Vendor, comp.Product, comp.Version)
+		componentSet.Add(genericID)
+		affectedMap[genericID] = append(affectedMap[genericID], comp.LocalID)
+	}
+
+	allGeneric := componentSet.ToSlice()
+	total := len(allGeneric)
 
 	merged := &CheckResponse{ByLocation: make(map[string]*LocationReport)}
-	for start := 0; start < len(allGeneric); start += maxComponentsPerRequest {
-		end := min(start+maxComponentsPerRequest, len(allGeneric))
 
-		batch, err := c.checkVulnsBatch(ctx, keysToComponents(allGeneric[start:end]), minScore, severities, confidence)
+	for start := 0; start < total; start += maxComponentsPerRequest {
+		end := min(start+maxComponentsPerRequest, total)
+		slice := allGeneric[start:end]
+
+		genericComponents := make([]Component, 0, len(slice))
+		for _, s := range slice {
+			component, err := parseComponentKey(s)
+			if err != nil {
+				continue
+			}
+			genericComponents = append(genericComponents, component)
+		}
+
+		batch, err := c.checkVulnsBatch(ctx, genericComponents, minScore, severities, confidence)
 		if err != nil {
 			return nil, err
 		}
-		mergeBatch(merged, batch, affectedMap)
+
+		newVulns := make([]Vulnerability, 0, len(batch.Vulnerable))
+		newUnmatched := make([]UnmatchedComponent, 0, len(batch.Unmatched))
+
+		for _, vuln := range batch.Vulnerable {
+			key := componentKey(vuln.Vendor, vuln.Product, vuln.InstalledVersion)
+			locs := affectedMap[key]
+			vuln.LocalID = strings.Join(locs, ",")
+			newVulns = append(newVulns, vuln)
+			for _, loc := range locs {
+				entry := merged.locationEntry(loc)
+				entry.Vulnerable = append(entry.Vulnerable, vuln)
+			}
+		}
+		for _, unm := range batch.Unmatched {
+			key := componentKey(unm.Vendor, unm.Product, unm.InstalledVersion)
+			locs := affectedMap[key]
+			unm.LocalID = strings.Join(locs, ",")
+			newUnmatched = append(newUnmatched, unm)
+			for _, loc := range locs {
+				entry := merged.locationEntry(loc)
+				entry.Unmatched = append(entry.Unmatched, unm)
+			}
+		}
+
+		merged.Vulnerable = append(merged.Vulnerable, newVulns...)
+		merged.Unmatched = append(merged.Unmatched, newUnmatched...)
+		merged.CheckedAt = batch.CheckedAt
 	}
 
 	return merged, nil
-}
-
-// groupByGenericComponent collapses per-location components down to their
-// unique vendor/product/version identity, remembering which local IDs (i.e.
-// installs) each identity was seen at.
-func groupByGenericComponent(components []Component) map[string][]string {
-	affected := make(map[string][]string, len(components))
-	for _, comp := range components {
-		key := componentKey(comp.Vendor, comp.Product, comp.Version)
-		affected[key] = append(affected[key], comp.LocalID)
-	}
-	return affected
-}
-
-func genericKeys(affected map[string][]string) []string {
-	keys := make([]string, 0, len(affected))
-	for key := range affected {
-		keys = append(keys, key)
-	}
-	return keys
-}
-
-func keysToComponents(keys []string) []Component {
-	components := make([]Component, 0, len(keys))
-	for _, key := range keys {
-		component, err := parseComponentKey(key)
-		if err != nil {
-			continue
-		}
-		components = append(components, component)
-	}
-	return components
-}
-
-// mergeBatch folds one batch response into merged, expanding each generic
-// result back out to every local install (location) it was seen at.
-func mergeBatch(merged, batch *CheckResponse, affected map[string][]string) {
-	for _, vuln := range batch.Vulnerable {
-		locs := affected[componentKey(vuln.Vendor, vuln.Product, vuln.InstalledVersion)]
-		vuln.LocalID = strings.Join(locs, ",")
-		merged.Vulnerable = append(merged.Vulnerable, vuln)
-		for _, loc := range locs {
-			entry := merged.locationEntry(loc)
-			entry.Vulnerable = append(entry.Vulnerable, vuln)
-		}
-	}
-	for _, unm := range batch.Unmatched {
-		locs := affected[componentKey(unm.Vendor, unm.Product, unm.InstalledVersion)]
-		unm.LocalID = strings.Join(locs, ",")
-		merged.Unmatched = append(merged.Unmatched, unm)
-		for _, loc := range locs {
-			entry := merged.locationEntry(loc)
-			entry.Unmatched = append(entry.Unmatched, unm)
-		}
-	}
-	merged.CheckedAt = batch.CheckedAt
 }
 
 func (c *Client) checkVulnsBatch(ctx context.Context, components []Component, minScore float64, severities []string, confidence string) (*CheckResponse, error) {
