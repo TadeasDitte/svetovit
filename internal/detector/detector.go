@@ -1,5 +1,3 @@
-
-
 package detector
 
 import (
@@ -9,15 +7,10 @@ import (
 	"regexp"
 )
 
-
-
 type VersionSpec struct {
 	File  string `yaml:"file"`
 	Regex string `yaml:"regex"`
 }
-
-
-
 
 type PluginSpec struct {
 	Glob         string `yaml:"glob"`
@@ -25,23 +18,18 @@ type PluginSpec struct {
 	VersionRegex string `yaml:"version_regex"`
 }
 
-
-
 type Detector struct {
-	Name    string      `yaml:"name"`
-	Markers []string    `yaml:"markers"`
-	Version VersionSpec `yaml:"version"`
-	Plugins PluginSpec  `yaml:"plugins"`
+	Name    string        `yaml:"name"`
+	Markers []string      `yaml:"markers"`
+	Version []VersionSpec `yaml:"version"`
+	Plugins PluginSpec    `yaml:"plugins"`
 }
-
 
 type Plugin struct {
 	Name    string
 	Version string
 	Path    string
 }
-
-
 
 func (d *Detector) Detect(root string) bool {
 	for _, marker := range d.Markers {
@@ -52,15 +40,18 @@ func (d *Detector) Detect(root string) bool {
 	return false
 }
 
-
 func (d *Detector) CoreVersion(root string) (string, error) {
-	if d.Version.File == "" {
-		return "", fmt.Errorf("%s: no version file configured", d.Name)
+	for _, versionSpec := range d.Version {
+		if versionSpec.File == "" {
+			continue
+		}
+		version, err := extractVersion(filepath.Join(root, versionSpec.File), versionSpec.Regex)
+		if err == nil {
+			return version, nil
+		}
 	}
-	return extractVersion(filepath.Join(root, d.Version.File), d.Version.Regex)
+	return "", fmt.Errorf("%s: no version found", d.Name)
 }
-
-
 
 func (d *Detector) DetectPlugins(root string) ([]Plugin, error) {
 	if d.Plugins.Glob == "" {
