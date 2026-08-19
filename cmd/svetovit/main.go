@@ -75,8 +75,7 @@ func run(args []string) int {
 		return 1
 	}
 	if len(components) == 0 {
-		fmt.Fprintf(os.Stderr, "svetovit: no known CMS platform detected at %s\n", *target)
-		return 1
+		fmt.Fprintf(os.Stderr, "svetovit: no known platform detected at %s\n", *target)
 	}
 
 	client := rozhanitsy.New(*serverURL, *token)

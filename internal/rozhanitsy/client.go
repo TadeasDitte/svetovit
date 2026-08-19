@@ -75,7 +75,7 @@ type CheckResponse struct {
 	Vulnerable []Vulnerability            `json:"vulnerable"`
 	Unmatched  []UnmatchedComponent       `json:"unmatched"`
 	CheckedAt  time.Time                  `json:"checked_at"`
-	ByLocation map[string]*LocationReport `json:"by_location,omitempty"`
+	ByLocation map[string]*LocationReport `json:"by_location"`
 }
 
 func (r *CheckResponse) locationEntry(loc string) *LocationReport {
