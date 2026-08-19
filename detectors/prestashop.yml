@@ -1,0 +1,12 @@
+name: prestashop
+markers:
+- config/settings.inc.php
+version:
+  - file: config/settings.inc.php
+    regex: 'define\(\s*[''"]_PS_VERSION_[''"]\s*,\s*[''"]([^''"]+)[''"]'
+  - file: app/AppKernel.php
+    regex: 'const VERSION\s*=\s*[''"]([^''"]+)[''"]'
+plugins:
+  glob: "modules/*"
+  version_file: "config.xml"
+  version_regex: '<version><!\[CDATA\[([^\]]+)\]\]></version>'
