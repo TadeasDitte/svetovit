@@ -1,0 +1,11 @@
+name: laravel
+markers:
+- artisan
+- vendor/laravel/framework/src/Illuminate/Foundation/Application.php
+version:
+  file: vendor/laravel/framework/src/Illuminate/Foundation/Application.php
+  regex: 'const VERSION\s*=\s*[''"]([^''"]+)[''"]'
+plugins:
+  glob: "vendor/*/*"
+  version_file: "composer.json"
+  version_regex: '"version":\s*"([^"]+)"'
