@@ -2,8 +2,8 @@ name: drupal
 markers:
 - core/lib/Drupal.php
 version:
-  file: core/lib/Drupal.php
-  regex: 'const VERSION\s*=\s*[''"]([^''"]+)[''"]'
+  - file: core/lib/Drupal.php
+    regex: 'const VERSION\s*=\s*[''"]([^''"]+)[''"]'
 plugins:
   glob: "modules/*/*"
   version_file: "module.info.yml"

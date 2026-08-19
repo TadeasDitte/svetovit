@@ -2,8 +2,8 @@ name: joomla
 markers:
 - administrator/manifests/files/joomla.xml
 version:
-  file: administrator/manifests/files/joomla.xml
-  regex: '<version>([^<]+)<\/version>'
+  - file: administrator/manifests/files/joomla.xml
+    regex: '<version>([^<]+)<\/version>'
 plugins:
   glob: "plugins/*/*"
   version_file: "plugin.xml"
