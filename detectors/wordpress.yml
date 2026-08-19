@@ -3,8 +3,8 @@ markers:
 - wp-load.php
 - wp-includes/version.php
 version:
-  file: wp-includes/version.php
-  regex: '\$wp_version\s*=\s*[''"]([^''"]+)[''"]'
+  - file: wp-includes/version.php
+    regex: '\$wp_version\s*=\s*[''"]([^''"]+)[''"]'
 
 plugins:
   glob: "wp-content/plugins/*"
