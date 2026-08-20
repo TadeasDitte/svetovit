@@ -23,18 +23,18 @@ func main() {
 }
 
 func run(args []string) int {
-	_ = godotenv.Load() // optional .env in cwd; real env vars still take precedence
+	_ = godotenv.Load()
 
 	fs := pflag.NewFlagSet("svetovit", pflag.ContinueOnError)
 	target := fs.StringP("target", "t", ".", "path to the CMS install (or tenant directory holding several installs) to scan")
 	depth := fs.IntP("depth", "d", scanner.UnlimitedDepth, "max directory levels below --target to search for CMS installs (0 = target only, 1 = target's immediate subdirectories, ...); default is a full recursive search")
-	serverURL := fs.StringP("server", "s", os.Getenv("ROZHANITSY_URL"), "Rozhanitsy server base URL (env ROZHANITSY_URL)")
-	token := fs.String("token", os.Getenv("SCAN_TOKEN"), "Rozhanitsy scan host bearer token (env SCAN_TOKEN)")
+	serverURL := fs.StringP("server", "S", os.Getenv("ROZHANITSY_URL"), "Rozhanitsy server base URL (env ROZHANITSY_URL)")
+	token := fs.StringP("token", "T", os.Getenv("SCAN_TOKEN"), "Rozhanitsy scan host bearer token (env SCAN_TOKEN)")
 	timeout := fs.Duration("timeout", 30*time.Second, "HTTP request timeout")
 
 	confidence := fs.StringP("confidence", "c", "all", "which results to report: bounded (known-vulnerable), unbound (unmatched), or all")
 	minScore := fs.Float64P("min-score", "m", 0, "only report vulnerabilities with CVSS score >= this value")
-	severity := fs.String("severity", "", "comma-separated CVSS severities to report, e.g. critical,high")
+	severity := fs.StringP("severity", "s", "", "comma-separated CVSS severities to report, e.g. critical,high")
 
 	outNormal := fs.String("oN", "", "also write the normal-format report to this file")
 	outJSON := fs.String("oJ", "", "also write a JSON report to this file")
