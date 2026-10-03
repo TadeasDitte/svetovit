@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"github.com/TadeasDitte/Svetovit/internal/report"
 	"github.com/TadeasDitte/Svetovit/internal/rozhanitsy"
 	"github.com/TadeasDitte/Svetovit/internal/scanner"
+	"github.com/TadeasDitte/Svetovit/internal/system"
 )
 
 func main() {
@@ -42,6 +44,7 @@ func run(args []string) int {
 
 	byLocations := fs.BoolP("per-location", "l", false, "show report per location")
 	format := fs.StringP("format", "f", "normal", "format output as json or quiet. quiet shows only errors")
+	skipSystem := fs.Bool("skip-system", false, "don't check the host's OS packages (dpkg, rpm, apk, pacman, FreeBSD pkg)")
 
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "svetovit: %v\n", err)
@@ -84,10 +87,11 @@ func run(args []string) int {
 	apiComponents := make([]rozhanitsy.Component, len(components))
 	for i, c := range components {
 		apiComponents[i] = rozhanitsy.Component{
-			Vendor:  c.Vendor,
-			Product: c.Product,
-			Version: c.Version,
-			LocalID: c.LocalID,
+			Vendor:    c.Vendor,
+			Product:   c.Product,
+			Version:   c.Version,
+			Ecosystem: c.Ecosystem,
+			LocalID:   c.LocalID,
 		}
 	}
 
@@ -105,11 +109,20 @@ func run(args []string) int {
 		return 1
 	}
 
+	var sys *report.System
+	if !*skipSystem {
+		sys, err = checkSystem(client, *timeout, *minScore, severities, apiConfidence(confidenceMode))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "svetovit: %v\n", err)
+			return 1
+		}
+	}
+
 	switch strings.ToLower(strings.TrimSpace(*format)) {
 	case "", "normal":
-		report.Print(os.Stdout, resp, sections, *byLocations)
+		report.Print(os.Stdout, resp, sys, sections, *byLocations)
 	case "json":
-		report.WriteJSON(os.Stdout, resp, sections, *byLocations)
+		report.WriteJSON(os.Stdout, resp, sys, sections, *byLocations)
 	case "quiet":
 		// nothing
 	default:
@@ -119,14 +132,14 @@ func run(args []string) int {
 
 	outputs := map[string]func(io.Writer) error{}
 	if *outNormal != "" {
-		outputs[*outNormal] = func(w io.Writer) error { report.Print(w, resp, sections, *byLocations); return nil }
+		outputs[*outNormal] = func(w io.Writer) error { report.Print(w, resp, sys, sections, *byLocations); return nil }
 	}
 	if *outJSON != "" {
-		outputs[*outJSON] = func(w io.Writer) error { return report.WriteJSON(w, resp, sections, *byLocations) }
+		outputs[*outJSON] = func(w io.Writer) error { return report.WriteJSON(w, resp, sys, sections, *byLocations) }
 	}
 	if *outAll != "" {
-		outputs[*outAll+".txt"] = func(w io.Writer) error { report.Print(w, resp, sections, *byLocations); return nil }
-		outputs[*outAll+".json"] = func(w io.Writer) error { return report.WriteJSON(w, resp, sections, *byLocations) }
+		outputs[*outAll+".txt"] = func(w io.Writer) error { report.Print(w, resp, sys, sections, *byLocations); return nil }
+		outputs[*outAll+".json"] = func(w io.Writer) error { return report.WriteJSON(w, resp, sys, sections, *byLocations) }
 	}
 	for path, write := range outputs {
 		if err := writeReportFile(path, write); err != nil {
@@ -135,10 +148,49 @@ func run(args []string) int {
 		}
 	}
 
-	if len(resp.Vulnerable) > 0 {
+	if len(resp.Vulnerable) > 0 || (sys != nil && len(sys.Response.Vulnerable) > 0) {
 		return 3
 	}
 	return 0
+}
+
+// checkSystem checks the host's OS packages in a request of their own. Hosts without a
+// supported package manager are skipped with a notice rather than failing the scan.
+func checkSystem(client *rozhanitsy.Client, timeout time.Duration, minScore float64, severities []string, confidence string) (*report.System, error) {
+	env, err := system.Detect()
+	if errors.Is(err, system.ErrUnsupported) {
+		fmt.Fprintf(os.Stderr, "svetovit: skipping system packages: %v\n", err)
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("detecting operating system: %w", err)
+	}
+
+	packages, err := env.Packages()
+	if err != nil {
+		return nil, fmt.Errorf("listing %s packages: %w", env.Manager, err)
+	}
+
+	components := make([]rozhanitsy.Component, len(packages))
+	for i, p := range packages {
+		components[i] = rozhanitsy.Component{
+			Vendor:    env.ID,
+			Product:   p.Name,
+			Version:   p.Version,
+			Ecosystem: env.Ecosystem,
+			LocalID:   env.Source(),
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout*2)
+	defer cancel()
+
+	resp, err := client.CheckVulns(ctx, components, minScore, severities, confidence)
+	if err != nil {
+		return nil, fmt.Errorf("checking system packages: %w", err)
+	}
+
+	return &report.System{Name: env.Name, Ecosystem: env.Ecosystem, Response: resp}, nil
 }
 
 func parseSections(confidence string) (report.Sections, string, error) {

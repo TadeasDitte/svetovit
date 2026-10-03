@@ -6,13 +6,22 @@ import (
 	"path/filepath"
 
 	"github.com/TadeasDitte/Svetovit/internal/detector"
+	"github.com/TadeasDitte/Svetovit/internal/lockfile"
 )
 
 type Component struct {
-	Vendor  string
-	Product string
-	Version string
-	LocalID string
+	Vendor    string
+	Product   string
+	Version   string
+	Ecosystem string
+	LocalID   string
+}
+
+// skipDirs are never searched for lock files: they hold dependencies' own lock files, not the site's.
+var skipDirs = map[string]bool{
+	"vendor":       true,
+	"node_modules": true,
+	".git":         true,
 }
 
 const UnlimitedDepth = -1
@@ -46,7 +55,62 @@ func (s *Scanner) Scan(root string) ([]Component, error) {
 		components = append(components, found...)
 	}
 
+	lockfiles, err := s.findLockfiles(absRoot, s.maxDepth)
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range lockfiles {
+		packages, err := lockfile.Parse(path)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range packages {
+			vendor := p.Namespace
+			if vendor == "" {
+				vendor = p.Name
+			}
+			components = append(components, Component{
+				Vendor:    vendor,
+				Product:   p.Name,
+				Version:   p.Version,
+				Ecosystem: p.Ecosystem,
+				LocalID:   path,
+			})
+		}
+	}
+
 	return components, nil
+}
+
+func (s *Scanner) findLockfiles(dir string, remainingDepth int) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if os.IsPermission(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", dir, err)
+	}
+
+	var found []string
+	for _, entry := range entries {
+		path := filepath.Join(dir, entry.Name())
+		if !entry.IsDir() {
+			if entry.Type().IsRegular() && lockfile.IsLockfile(entry.Name()) {
+				found = append(found, path)
+			}
+			continue
+		}
+		if remainingDepth == 0 || skipDirs[entry.Name()] {
+			continue
+		}
+		nested, err := s.findLockfiles(path, decrementDepth(remainingDepth))
+		if err != nil {
+			return nil, err
+		}
+		found = append(found, nested...)
+	}
+
+	return found, nil
 }
 
 func (s *Scanner) discoverSites(root string) ([]string, error) {

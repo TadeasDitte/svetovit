@@ -18,25 +18,33 @@ const maxComponentsPerRequest = 2000
 const keySep = "\x1f"
 
 type Component struct {
-	Vendor  string `json:"vendor"`
-	Product string `json:"product"`
-	Version string `json:"version"`
-	LocalID string `json:"local_id,omitempty"`
+	Vendor    string `json:"vendor"`
+	Product   string `json:"product"`
+	Version   string `json:"version"`
+	Ecosystem string `json:"ecosystem,omitempty"`
+	LocalID   string `json:"local_id,omitempty"`
 }
 
 func componentKey(vendor, product, version string) string {
 	return vendor + keySep + product + keySep + version
 }
 
-func parseComponentKey(key string) (Component, error) {
+// requestKey identifies a component to send; unlike componentKey it keeps the
+// ecosystem, which the response doesn't echo back.
+func requestKey(comp Component) string {
+	return componentKey(comp.Vendor, comp.Product, comp.Version) + keySep + comp.Ecosystem
+}
+
+func parseRequestKey(key string) (Component, error) {
 	parts := strings.Split(key, keySep)
-	if len(parts) != 3 {
+	if len(parts) != 4 {
 		return Component{}, fmt.Errorf("rozhanitsy: invalid component key: %q", key)
 	}
 	return Component{
-		Vendor:  parts[0],
-		Product: parts[1],
-		Version: parts[2],
+		Vendor:    parts[0],
+		Product:   parts[1],
+		Version:   parts[2],
+		Ecosystem: parts[3],
 	}, nil
 }
 
@@ -128,7 +136,7 @@ func (c *Client) CheckVulns(ctx context.Context, components []Component, minScor
 	affectedMap := make(map[string][]string)
 	for _, comp := range components {
 		genericID := componentKey(comp.Vendor, comp.Product, comp.Version)
-		componentSet.Add(genericID)
+		componentSet.Add(requestKey(comp))
 		affectedMap[genericID] = append(affectedMap[genericID], comp.LocalID)
 	}
 
@@ -143,7 +151,7 @@ func (c *Client) CheckVulns(ctx context.Context, components []Component, minScor
 
 		genericComponents := make([]Component, 0, len(slice))
 		for _, s := range slice {
-			component, err := parseComponentKey(s)
+			component, err := parseRequestKey(s)
 			if err != nil {
 				continue
 			}
