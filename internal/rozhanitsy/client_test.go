@@ -106,3 +106,53 @@ func TestNVDOnlyDropsOSVAdvisories(t *testing.T) {
 		t.Errorf("unexpected vulnerable: %+v", resp.Vulnerable)
 	}
 }
+
+func TestAnnotateVendorsUsesDetailsEndpointOnce(t *testing.T) {
+	var lookups atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/vulnerabilities/CVE-1":
+			lookups.Add(1)
+			fmt.Fprint(w, `{"data":[{"affected":[{"vendor":"knplabs","product":"snappy"},{"vendor":"other","product":"unrelated"}]}]}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	vuln := Vulnerability{Product: "snappy", CVEID: "CVE-1", LocalID: "/a"}
+	resp := &CheckResponse{
+		Vulnerable: []Vulnerability{vuln, {Product: "snappy", CVEID: "CVE-1", LocalID: "/b"}, {Product: "x", CVEID: "CVE-GONE"}},
+		ByLocation: map[string]*LocationReport{"/a": {Vulnerable: []Vulnerability{vuln}}},
+	}
+	skipped, err := New(srv.URL, "").AnnotateVendors(context.Background(), resp)
+	if err != nil || skipped != 0 {
+		t.Fatalf("skipped=%d err=%v", skipped, err)
+	}
+	if resp.Vulnerable[0].Vendor != "knplabs" || resp.Vulnerable[1].Vendor != "knplabs" || resp.ByLocation["/a"].Vulnerable[0].Vendor != "knplabs" {
+		t.Errorf("vendor not annotated: %+v", resp)
+	}
+	if resp.Vulnerable[2].Vendor != "" {
+		t.Errorf("unknown CVE should stay blank: %+v", resp.Vulnerable[2])
+	}
+	if lookups.Load() != 1 {
+		t.Errorf("want 1 details lookup for CVE-1, got %d", lookups.Load())
+	}
+}
+
+func TestRemoveAndMerge(t *testing.T) {
+	a := Vulnerability{Product: "orc", CVEID: "CVE-A", LocalID: "/s"}
+	b := Vulnerability{Product: "zlib", CVEID: "CVE-B", LocalID: "/s"}
+	resp := &CheckResponse{Vulnerable: []Vulnerability{a, b}, ByLocation: map[string]*LocationReport{"/s": {Vulnerable: []Vulnerability{a, b}}}}
+
+	resp.Remove(func(p string) bool { return p == "orc" })
+	resp.Merge(&CheckResponse{Vulnerable: []Vulnerability{{Product: "orc", Vendor: "gstreamer", CVEID: "CVE-C", LocalID: "/s"}},
+		ByLocation: map[string]*LocationReport{"/s": {Vulnerable: []Vulnerability{{Product: "orc", Vendor: "gstreamer", CVEID: "CVE-C"}}}}})
+
+	if len(resp.Vulnerable) != 2 || resp.Vulnerable[0].CVEID != "CVE-B" || resp.Vulnerable[1].CVEID != "CVE-C" {
+		t.Errorf("unexpected vulnerable: %+v", resp.Vulnerable)
+	}
+	if got := resp.ByLocation["/s"].Vulnerable; len(got) != 2 || got[0].CVEID != "CVE-B" || got[1].CVEID != "CVE-C" {
+		t.Errorf("unexpected by-location: %+v", got)
+	}
+}
