@@ -44,7 +44,7 @@ func run(args []string) int {
 
 	byLocations := fs.BoolP("per-location", "l", false, "show report per location")
 	format := fs.StringP("format", "f", "normal", "format output as json or quiet. quiet shows only errors")
-	skipSystem := fs.Bool("skip-system", false, "don't check the host's OS packages (dpkg, rpm, apk, pacman, FreeBSD pkg)")
+	skipSystem := fs.Bool("skip-system", false, "don't check the host's OS packages (dpkg, rpm, apk, pacman, nix, FreeBSD pkg)")
 
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "svetovit: %v\n", err)
@@ -172,6 +172,7 @@ func checkSystem(client *rozhanitsy.Client, minScore float64, severities []strin
 			Version:   p.Version,
 			Ecosystem: env.Ecosystem,
 			LocalID:   env.Source(),
+			NVDOnly:   env.Ecosystem == "",
 		}
 	}
 

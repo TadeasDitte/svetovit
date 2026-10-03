@@ -65,7 +65,11 @@ func Print(w io.Writer, resp *rozhanitsy.CheckResponse, system *System, sections
 	printApplications(w, resp, sections, byLocations)
 
 	if system != nil {
-		fmt.Fprintf(w, "\nSystem packages: %s (%s)\n\n", system.Name, system.Ecosystem)
+		heading := system.Name
+		if system.Ecosystem != "" {
+			heading += " (" + system.Ecosystem + ")"
+		}
+		fmt.Fprintf(w, "\nSystem packages: %s\n\n", heading)
 		if sections.Bounded {
 			printVulnerable(w, system.Response.Vulnerable, true)
 		}
@@ -166,7 +170,11 @@ func printUnmatched(w io.Writer, unmatched []rozhanitsy.UnmatchedComponent) {
 	fmt.Fprintf(w, "%d component%s could not be matched against the vulnerability database:\n",
 		len(unmatched), suffix(len(unmatched)))
 	for _, u := range unmatched {
-		fmt.Fprintf(w, "  - %s/%s (%s)\n", u.Vendor, u.Product, u.LocalID)
+		name := u.Product
+		if u.Vendor != "" {
+			name = u.Vendor + "/" + u.Product
+		}
+		fmt.Fprintf(w, "  - %s (%s)\n", name, u.LocalID)
 	}
 }
 

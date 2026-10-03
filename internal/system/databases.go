@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -125,4 +126,27 @@ func dedupe(packages []Package) []Package {
 		}
 	}
 	return out
+}
+
+// nixStorePath matches a store path's "<hash>-<name>-<version>" tail. The version is the first
+// dash-separated segment starting with a digit; trailing output names (-bin, -dev, ...) and
+// nixpkgs revision suffixes are dropped.
+var nixStorePath = regexp.MustCompile(`^/nix/store/[0-9a-z]{32}-(.+?)-([0-9][0-9A-Za-z.+_]*)(?:-.*)?$`)
+
+// parseNixClosure turns store paths (one per line) into packages. Derivations, sources, generated
+// config and anything without a version are skipped.
+func parseNixClosure(out string) []Package {
+	var packages []Package
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasSuffix(line, ".drv") || strings.HasSuffix(line, "-source") {
+			continue
+		}
+		m := nixStorePath.FindStringSubmatch(line)
+		if m == nil || strings.HasPrefix(m[1], "nixos-system") {
+			continue
+		}
+		packages = append(packages, Package{Name: m[1], Version: strings.TrimRight(m[2], ".")})
+	}
+	return dedupe(packages)
 }

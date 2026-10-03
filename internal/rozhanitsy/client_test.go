@@ -88,3 +88,21 @@ func TestCheckVulnsFiltersByScoreAndSeverity(t *testing.T) {
 		t.Errorf("unexpected vulnerable: %+v", resp.Vulnerable)
 	}
 }
+
+func TestNVDOnlyDropsOSVAdvisories(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(batchResponse{Data: []checkResult{{Vulnerabilities: []apiVulnerability{
+			{ID: "DEBIAN-CVE-1", Source: "osv", CVSSScore: 9, Severity: "Critical", Confidence: "high"},
+			{ID: "CVE-1", Source: "nvd", CVSSScore: 9, Severity: "Critical", Confidence: "high"},
+		}}}})
+	}))
+	defer srv.Close()
+
+	resp, err := New(srv.URL, "").CheckVulns(context.Background(), []Component{{Product: "x", Version: "1", NVDOnly: true}}, 0, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Vulnerable) != 1 || resp.Vulnerable[0].CVEID != "CVE-1" || resp.Vulnerable[0].CVSSSeverity != "CRITICAL" {
+		t.Errorf("unexpected vulnerable: %+v", resp.Vulnerable)
+	}
+}
