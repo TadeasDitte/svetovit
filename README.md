@@ -19,12 +19,19 @@ Usage of svetovit:
   -l, --per-location        show report per location
   -s, --server string       Rozhanitsy server base URL (env ROZHANITSY_URL)
       --severity string     comma-separated CVSS severities to report, e.g. critical,high
+      --skip-system         don't check the host's OS packages (dpkg, rpm, apk, pacman, FreeBSD pkg)
   -t, --target string       path to the directory to scan (default ".")
       --timeout duration    HTTP request timeout (default 30s)
       --token string        Rozhanitsy scan host bearer token (env SCAN_TOKEN)
 ```
 ```
 ```
+
+Besides the CMS installs matched by the detectors, Svetovit also reads every `composer.lock` and `pnpm-lock.yaml`
+under `--target` (within `--depth`, skipping `vendor/` and `node_modules/`).
+
+On Debian/Ubuntu, RHEL-likes/SUSE, Alpine, Arch and FreeBSD hosts the installed OS packages are checked too, in a
+separate request, and reported in their own "System packages" block (`system` key in JSON output).
 
 Minimal command example:
 `svetovit --token ${API_TOKEN} -s ${ROZHANITSY_URL}`

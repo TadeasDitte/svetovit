@@ -52,9 +52,35 @@ func (f Filter) Apply(vulns []rozhanitsy.Vulnerability) []rozhanitsy.Vulnerabili
 	return out
 }
 
-func Print(w io.Writer, resp *rozhanitsy.CheckResponse, sections Sections, byLocations bool) {
+// System is the result of checking the host's OS packages, reported in its own block.
+type System struct {
+	Name      string
+	Ecosystem string
+	Response  *rozhanitsy.CheckResponse
+}
+
+func Print(w io.Writer, resp *rozhanitsy.CheckResponse, system *System, sections Sections, byLocations bool) {
 	fmt.Fprintf(w, "Scan checked at %s\n\n", resp.CheckedAt.Format(time.RFC3339))
 
+	printApplications(w, resp, sections, byLocations)
+
+	if system != nil {
+		fmt.Fprintf(w, "\nSystem packages: %s (%s)\n\n", system.Name, system.Ecosystem)
+		if sections.Bounded {
+			printVulnerable(w, system.Response.Vulnerable, true)
+		}
+		if sections.Unbound {
+			if sections.Bounded {
+				fmt.Fprintln(w)
+			}
+			// Most OS packages have no advisories at all, so listing them would drown the report.
+			fmt.Fprintf(w, "%d package%s could not be matched against the vulnerability database (see JSON output for the list).\n",
+				len(system.Response.Unmatched), suffix(len(system.Response.Unmatched)))
+		}
+	}
+}
+
+func printApplications(w io.Writer, resp *rozhanitsy.CheckResponse, sections Sections, byLocations bool) {
 	if byLocations {
 		if len(resp.ByLocation) == 0 {
 			fmt.Fprintln(w, "No locations to report (matching current filters).")
@@ -144,8 +170,33 @@ func printUnmatched(w io.Writer, unmatched []rozhanitsy.UnmatchedComponent) {
 	}
 }
 
-func WriteJSON(w io.Writer, resp *rozhanitsy.CheckResponse, sections Sections, byLocations bool) error {
+type jsonReport struct {
+	rozhanitsy.CheckResponse
+	System *jsonSystem `json:"system,omitempty"`
+}
 
+type jsonSystem struct {
+	Name      string `json:"name"`
+	Ecosystem string `json:"ecosystem"`
+	rozhanitsy.CheckResponse
+}
+
+func WriteJSON(w io.Writer, resp *rozhanitsy.CheckResponse, system *System, sections Sections, byLocations bool) error {
+	out := jsonReport{CheckResponse: filterSections(resp, sections, byLocations)}
+	if system != nil {
+		out.System = &jsonSystem{
+			Name:          system.Name,
+			Ecosystem:     system.Ecosystem,
+			CheckResponse: filterSections(system.Response, sections, false),
+		}
+	}
+
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(out)
+}
+
+func filterSections(resp *rozhanitsy.CheckResponse, sections Sections, byLocations bool) rozhanitsy.CheckResponse {
 	out := *resp
 	if byLocations {
 		out.Vulnerable = nil
@@ -176,10 +227,7 @@ func WriteJSON(w io.Writer, resp *rozhanitsy.CheckResponse, sections Sections, b
 			out.Unmatched = nil
 		}
 	}
-
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	return enc.Encode(out)
+	return out
 }
 
 func plural(n int) string {
