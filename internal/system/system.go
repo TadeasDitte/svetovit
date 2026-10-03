@@ -3,13 +3,18 @@ package system
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 )
+
+// packageQueryTimeout bounds external package-manager queries.
+const packageQueryTimeout = 2 * time.Minute
 
 // ErrUnsupported is returned by Detect when the host has no package manager Svetovit knows how to read.
 var ErrUnsupported = errors.New("unsupported operating system")
@@ -22,6 +27,7 @@ const (
 	APK    Manager = "apk"
 	Pacman Manager = "pacman"
 	BSDPkg Manager = "pkg"
+	Nix    Manager = "nix"
 )
 
 // Environment describes the host OS. Ecosystem follows the OSV ecosystem naming (e.g. "Debian:12").
@@ -106,6 +112,8 @@ func managerFor(families []string) Manager {
 			return APK
 		case "arch":
 			return Pacman
+		case "nixos":
+			return Nix
 		}
 		if strings.HasPrefix(id, "opensuse") {
 			return RPM
@@ -138,6 +146,9 @@ func ecosystemFor(id, versionID string) string {
 		return "Red Hat"
 	case "arch":
 		return "Arch Linux"
+	case "nixos":
+		// OSV has no nixpkgs ecosystem; packages are matched by name alone.
+		return ""
 	}
 	if versionID == "" {
 		return id
@@ -149,6 +160,7 @@ const (
 	dpkgStatus    = "/var/lib/dpkg/status"
 	apkInstalled  = "/lib/apk/db/installed"
 	pacmanLocalDB = "/var/lib/pacman/local"
+	nixSystem     = "/run/current-system"
 )
 
 // Source names where the package list is read from, used as the report location.
@@ -160,6 +172,8 @@ func (e *Environment) Source() string {
 		return apkInstalled
 	case Pacman:
 		return pacmanLocalDB
+	case Nix:
+		return nixSystem
 	}
 	return string(e.Manager)
 }
@@ -177,12 +191,17 @@ func (e *Environment) Packages() ([]Package, error) {
 		return queryTabSeparated("rpm", "-qa", "--qf", `%{NAME}\t%{EPOCHNUM}:%{VERSION}-%{RELEASE}\n`)
 	case BSDPkg:
 		return queryTabSeparated("pkg", "query", `%n\t%v`)
+	case Nix:
+		return nixPackages()
 	}
 	return nil, fmt.Errorf("%w: no package manager", ErrUnsupported)
 }
 
 func queryTabSeparated(name string, args ...string) ([]Package, error) {
-	out, err := exec.Command(name, args...).Output()
+	ctx, cancel := context.WithTimeout(context.Background(), packageQueryTimeout)
+	defer cancel()
+
+	out, err := exec.CommandContext(ctx, name, args...).Output()
 	if err != nil {
 		return nil, fmt.Errorf("running %s: %w", name, err)
 	}
@@ -198,4 +217,17 @@ func queryTabSeparated(name string, args ...string) ([]Package, error) {
 		packages = append(packages, Package{Name: pkgName, Version: version})
 	}
 	return packages, nil
+}
+
+// nixPackages lists the running system's closure: everything the current generation depends on,
+// including packages only pulled in as dependencies.
+func nixPackages() ([]Package, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), packageQueryTimeout)
+	defer cancel()
+
+	out, err := exec.CommandContext(ctx, "nix-store", "-q", "--requisites", nixSystem).Output()
+	if err != nil {
+		return nil, fmt.Errorf("running nix-store: %w", err)
+	}
+	return parseNixClosure(string(out)), nil
 }

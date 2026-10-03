@@ -27,6 +27,10 @@ type Component struct {
 	Version   string `json:"version"`
 	Ecosystem string `json:"ecosystem,omitempty"`
 	LocalID   string `json:"local_id,omitempty"`
+
+	// NVDOnly ignores OSV advisories for this component. OSV records are scoped to a distro or ecosystem
+	// whose version ranges mean nothing for a component that has no ecosystem to compare against.
+	NVDOnly bool `json:"-"`
 }
 
 // requestKey identifies a component to send; identical components found at several locations are
@@ -49,6 +53,7 @@ type batchRequest struct {
 
 type apiVulnerability struct {
 	ID         string  `json:"id"`
+	Source     string  `json:"source"`
 	CVSSScore  float64 `json:"cvss_score"`
 	Severity   string  `json:"severity"`
 	Confidence string  `json:"confidence"`
@@ -188,6 +193,9 @@ func (c *Client) CheckVulns(ctx context.Context, components []Component, minScor
 
 			hasHigh, hasLow := false, false
 			for _, v := range results[i].Vulnerabilities {
+				if comp.NVDOnly && v.Source != "nvd" {
+					continue
+				}
 				if v.Confidence == "low" {
 					hasLow = true
 					continue
@@ -203,7 +211,7 @@ func (c *Client) CheckVulns(ctx context.Context, components []Component, minScor
 					InstalledVersion: comp.Version,
 					CVEID:            v.ID,
 					CVSSScore:        v.CVSSScore,
-					CVSSSeverity:     v.Severity,
+					CVSSSeverity:     strings.ToUpper(v.Severity),
 				}
 				merged.Vulnerable = append(merged.Vulnerable, vuln)
 				for _, loc := range locs {
