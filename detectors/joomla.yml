@@ -5,6 +5,18 @@ version:
   - file: administrator/manifests/files/joomla.xml
     regex: '<version>([^<]+)<\/version>'
 plugins:
-  glob: "plugins/*/*"
-  version_file: "plugin.xml"
-  version_regex: '<version>([^<]+)<\/version>'
+  # Extensions ship a <name>.xml manifest, so any *.xml in the directory may carry the version.
+  - glob: "plugins/*/*"
+    version: &xml
+      - file: "*.xml"
+        regex: '<version>([^<]+)<\/version>'
+  - glob: "administrator/components/*"
+    version: *xml
+  - glob: "modules/*"
+    version: *xml
+  - glob: "administrator/modules/*"
+    version: *xml
+  - glob: "templates/*"
+    version:
+      - file: "templateDetails.xml"
+        regex: '<version>([^<]+)<\/version>'

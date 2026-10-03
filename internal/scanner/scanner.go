@@ -65,12 +65,8 @@ func (s *Scanner) Scan(root string) ([]Component, error) {
 			return nil, err
 		}
 		for _, p := range packages {
-			vendor := p.Namespace
-			if vendor == "" {
-				vendor = p.Name
-			}
+			// Ecosystem packages are matched by name alone; the API wants no vendor for them.
 			components = append(components, Component{
-				Vendor:    vendor,
 				Product:   p.Name,
 				Version:   p.Version,
 				Ecosystem: p.Ecosystem,
@@ -125,13 +121,17 @@ func (s *Scanner) discoverSites(root string) ([]string, error) {
 
 func (s *Scanner) discoverSitesBelow(root string, remainingDepth int) ([]string, error) {
 	entries, err := os.ReadDir(root)
+	if os.IsPermission(err) {
+		fmt.Fprintf(os.Stderr, "warning: skipping unreadable directory %s\n", root)
+		return nil, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", root, err)
 	}
 
 	var sites []string
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !entry.IsDir() || skipDirs[entry.Name()] {
 			continue
 		}
 		dir := filepath.Join(root, entry.Name())
@@ -183,6 +183,8 @@ func (s *Scanner) scanSite(site string) ([]Component, error) {
 				Version: version,
 				LocalID: site,
 			})
+		} else {
+			fmt.Fprintf(os.Stderr, "warning: %s detected at %s but version unknown\n", d.Name, site)
 		}
 
 		plugins, err := d.DetectPlugins(site)
@@ -192,7 +194,6 @@ func (s *Scanner) scanSite(site string) ([]Component, error) {
 
 		for _, p := range plugins {
 			components = append(components, Component{
-				Vendor:  p.Name,
 				Product: p.Name,
 				Version: p.Version,
 				LocalID: p.Path,
