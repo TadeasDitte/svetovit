@@ -31,7 +31,7 @@ func run(args []string) int {
 	target := fs.StringP("target", "t", ".", "path to the CMS install (or tenant directory holding several installs) to scan")
 	depth := fs.IntP("depth", "d", scanner.UnlimitedDepth, "max directory levels below --target to search for CMS installs (0 = target only, 1 = target's immediate subdirectories, ...); default is a full recursive search")
 	serverURL := fs.StringP("server", "S", os.Getenv("ROZHANITSY_URL"), "Rozhanitsy server base URL (env ROZHANITSY_URL)")
-	token := fs.StringP("token", "T", os.Getenv("SCAN_TOKEN"), "Rozhanitsy scan host bearer token (env SCAN_TOKEN)")
+	token := fs.StringP("token", "T", os.Getenv("SCAN_TOKEN"), "optional Rozhanitsy bearer token (env SCAN_TOKEN); the API is public")
 	timeout := fs.Duration("timeout", 30*time.Second, "HTTP request timeout")
 
 	confidence := fs.StringP("confidence", "c", "all", "which results to report: bounded (known-vulnerable), unbound (unmatched), or all")
@@ -55,11 +55,6 @@ func run(args []string) int {
 		fmt.Fprintln(os.Stderr, "svetovit: --server or ROZHANITSY_URL is required")
 		return 2
 	}
-	if *token == "" {
-		fmt.Fprintln(os.Stderr, "svetovit: --token or SCAN_TOKEN is required")
-		return 2
-	}
-
 	sections, confidenceMode, err := parseSections(*confidence)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "svetovit: %v\n", err)
@@ -95,15 +90,14 @@ func run(args []string) int {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), *timeout*2)
-	defer cancel()
+	ctx := context.Background()
 
 	var severities []string
 	if *severity != "" {
 		severities = strings.Split(*severity, ",")
 	}
 
-	resp, err := client.CheckVulns(ctx, apiComponents, *minScore, severities, apiConfidence(confidenceMode))
+	resp, err := client.CheckVulns(ctx, apiComponents, *minScore, severities, confidenceMode != "bounded")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "svetovit: %v\n", err)
 		return 1
@@ -111,7 +105,7 @@ func run(args []string) int {
 
 	var sys *report.System
 	if !*skipSystem {
-		sys, err = checkSystem(client, *timeout, *minScore, severities, apiConfidence(confidenceMode))
+		sys, err = checkSystem(client, *minScore, severities, confidenceMode != "bounded")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "svetovit: %v\n", err)
 			return 1
@@ -156,7 +150,7 @@ func run(args []string) int {
 
 // checkSystem checks the host's OS packages in a request of their own. Hosts without a
 // supported package manager are skipped with a notice rather than failing the scan.
-func checkSystem(client *rozhanitsy.Client, timeout time.Duration, minScore float64, severities []string, confidence string) (*report.System, error) {
+func checkSystem(client *rozhanitsy.Client, minScore float64, severities []string, includeLow bool) (*report.System, error) {
 	env, err := system.Detect()
 	if errors.Is(err, system.ErrUnsupported) {
 		fmt.Fprintf(os.Stderr, "svetovit: skipping system packages: %v\n", err)
@@ -174,7 +168,6 @@ func checkSystem(client *rozhanitsy.Client, timeout time.Duration, minScore floa
 	components := make([]rozhanitsy.Component, len(packages))
 	for i, p := range packages {
 		components[i] = rozhanitsy.Component{
-			Vendor:    env.ID,
 			Product:   p.Name,
 			Version:   p.Version,
 			Ecosystem: env.Ecosystem,
@@ -182,10 +175,7 @@ func checkSystem(client *rozhanitsy.Client, timeout time.Duration, minScore floa
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout*2)
-	defer cancel()
-
-	resp, err := client.CheckVulns(ctx, components, minScore, severities, confidence)
+	resp, err := client.CheckVulns(context.Background(), components, minScore, severities, includeLow)
 	if err != nil {
 		return nil, fmt.Errorf("checking system packages: %w", err)
 	}
@@ -208,13 +198,6 @@ func parseSections(confidence string) (report.Sections, string, error) {
 	default:
 		return report.Sections{}, "", fmt.Errorf("invalid --confidence value %q (want bounded, unbound, or all)", confidence)
 	}
-}
-
-func apiConfidence(mode string) string {
-	if mode == "bounded" {
-		return "bounded"
-	}
-	return "all"
 }
 
 func writeReportFile(path string, write func(io.Writer) error) error {

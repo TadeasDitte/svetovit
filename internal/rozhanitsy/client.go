@@ -4,56 +4,65 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
-
-	mapset "github.com/deckarep/golang-set/v2"
 )
 
-const maxComponentsPerRequest = 2000
+// maxComponentsPerRequest is the batch endpoint's limit.
+const maxComponentsPerRequest = 100
+
+// maxRetries is how many times a rate-limited (429) request is retried.
+const maxRetries = 5
 
 const keySep = "\x1f"
 
 type Component struct {
-	Vendor    string `json:"vendor"`
+	Vendor    string `json:"vendor,omitempty"`
 	Product   string `json:"product"`
 	Version   string `json:"version"`
 	Ecosystem string `json:"ecosystem,omitempty"`
 	LocalID   string `json:"local_id,omitempty"`
 }
 
-func componentKey(vendor, product, version string) string {
-	return vendor + keySep + product + keySep + version
-}
-
-// requestKey identifies a component to send; unlike componentKey it keeps the
-// ecosystem, which the response doesn't echo back.
+// requestKey identifies a component to send; identical components found at several locations are
+// sent once and mapped back to every location.
 func requestKey(comp Component) string {
-	return componentKey(comp.Vendor, comp.Product, comp.Version) + keySep + comp.Ecosystem
+	return strings.Join([]string{comp.Vendor, comp.Product, comp.Version, comp.Ecosystem}, keySep)
 }
 
-func parseRequestKey(key string) (Component, error) {
-	parts := strings.Split(key, keySep)
-	if len(parts) != 4 {
-		return Component{}, fmt.Errorf("rozhanitsy: invalid component key: %q", key)
-	}
-	return Component{
-		Vendor:    parts[0],
-		Product:   parts[1],
-		Version:   parts[2],
-		Ecosystem: parts[3],
-	}, nil
+type batchPackage struct {
+	Vendor    string `json:"vendor,omitempty"`
+	Product   string `json:"product"`
+	Version   string `json:"version"`
+	Ecosystem string `json:"ecosystem,omitempty"`
 }
 
-type CheckRequest struct {
-	TenantID   string      `json:"tenant_id,omitempty"`
-	Components []Component `json:"components"`
-	MinScore   float64     `json:"min_cvss_score"`
-	Severities []string    `json:"severity,omitempty"`
-	Confidence string      `json:"confidence"`
+type batchRequest struct {
+	Packages             []batchPackage `json:"packages"`
+	IncludeLowConfidence bool           `json:"include_low_confidence"`
+}
+
+type apiVulnerability struct {
+	ID         string  `json:"id"`
+	CVSSScore  float64 `json:"cvss_score"`
+	Severity   string  `json:"severity"`
+	Confidence string  `json:"confidence"`
+}
+
+type checkResult struct {
+	Vendor          string             `json:"vendor"`
+	Product         string             `json:"product"`
+	Version         string             `json:"version"`
+	Vulnerabilities []apiVulnerability `json:"vulnerabilities"`
+}
+
+type batchResponse struct {
+	Data []checkResult `json:"data"`
 }
 
 type Vulnerability struct {
@@ -63,10 +72,11 @@ type Vulnerability struct {
 	InstalledVersion string  `json:"installed_version"`
 	CVEID            string  `json:"cve_id"`
 	CVSSScore        float64 `json:"cvss_score"`
-	CVSSVector       string  `json:"cvss_vector"`
 	CVSSSeverity     string  `json:"cvss_severity"`
 }
 
+// UnmatchedComponent is a component whose only matches are low-confidence: the source named the
+// product but gave no version bounds.
 type UnmatchedComponent struct {
 	Vendor           string `json:"vendor"`
 	Product          string `json:"product"`
@@ -102,12 +112,10 @@ type APIError struct {
 
 func (e *APIError) Error() string {
 	switch e.StatusCode {
-	case http.StatusUnauthorized:
-		return "rozhanitsy: unauthorized (missing, invalid, revoked token, or deactivated host)"
 	case http.StatusUnprocessableEntity:
 		return fmt.Sprintf("rozhanitsy: validation failed: %s", e.Body)
 	case http.StatusTooManyRequests:
-		return "rozhanitsy: rate limit exceeded (30 requests/minute)"
+		return "rozhanitsy: rate limit exceeded (60 requests/minute)"
 	default:
 		return fmt.Sprintf("rozhanitsy: unexpected status %d: %s", e.StatusCode, e.Body)
 	}
@@ -115,8 +123,9 @@ func (e *APIError) Error() string {
 
 type Client struct {
 	BaseURL string
-	Token   string
-	HTTP    *http.Client
+	// Token is optional: the API is public, but a bearer token is sent when one is set.
+	Token string
+	HTTP  *http.Client
 }
 
 func New(baseURL, token string) *Client {
@@ -127,108 +136,159 @@ func New(baseURL, token string) *Client {
 	}
 }
 
-func (c *Client) CheckVulns(ctx context.Context, components []Component, minScore float64, severities []string, confidence string) (*CheckResponse, error) {
+// CheckVulns checks components against the vulnerability database. includeLow also returns
+// low-confidence matches, which are reported as Unmatched. minScore and severities filter results
+// client-side.
+func (c *Client) CheckVulns(ctx context.Context, components []Component, minScore float64, severities []string, includeLow bool) (*CheckResponse, error) {
+	merged := &CheckResponse{CheckedAt: time.Now(), ByLocation: make(map[string]*LocationReport)}
 	if len(components) == 0 {
-		return &CheckResponse{CheckedAt: time.Now(), ByLocation: make(map[string]*LocationReport)}, nil
+		return merged, nil
 	}
 
-	componentSet := mapset.NewSet[string]()
-	affectedMap := make(map[string][]string)
+	allowed := make(map[string]bool, len(severities))
+	for _, s := range severities {
+		allowed[strings.ToUpper(strings.TrimSpace(s))] = true
+	}
+
+	// Dedupe, keeping first-seen order so batches are deterministic.
+	var keys []string
+	unique := make(map[string]Component)
+	locations := make(map[string][]string)
 	for _, comp := range components {
-		genericID := componentKey(comp.Vendor, comp.Product, comp.Version)
-		componentSet.Add(requestKey(comp))
-		affectedMap[genericID] = append(affectedMap[genericID], comp.LocalID)
+		key := requestKey(comp)
+		if _, seen := unique[key]; !seen {
+			unique[key] = comp
+			keys = append(keys, key)
+		}
+		locations[key] = append(locations[key], comp.LocalID)
 	}
 
-	allGeneric := componentSet.ToSlice()
-	total := len(allGeneric)
+	for start := 0; start < len(keys); start += maxComponentsPerRequest {
+		end := min(start+maxComponentsPerRequest, len(keys))
+		batchKeys := keys[start:end]
 
-	merged := &CheckResponse{ByLocation: make(map[string]*LocationReport)}
-
-	for start := 0; start < total; start += maxComponentsPerRequest {
-		end := min(start+maxComponentsPerRequest, total)
-		slice := allGeneric[start:end]
-
-		genericComponents := make([]Component, 0, len(slice))
-		for _, s := range slice {
-			component, err := parseRequestKey(s)
-			if err != nil {
-				continue
-			}
-			genericComponents = append(genericComponents, component)
+		packages := make([]batchPackage, len(batchKeys))
+		for i, key := range batchKeys {
+			comp := unique[key]
+			packages[i] = batchPackage{Vendor: comp.Vendor, Product: comp.Product, Version: comp.Version, Ecosystem: comp.Ecosystem}
 		}
 
-		batch, err := c.checkVulnsBatch(ctx, genericComponents, minScore, severities, confidence)
+		results, err := c.checkBatch(ctx, packages, includeLow)
 		if err != nil {
 			return nil, err
 		}
-
-		newVulns := make([]Vulnerability, 0, len(batch.Vulnerable))
-		newUnmatched := make([]UnmatchedComponent, 0, len(batch.Unmatched))
-
-		for _, vuln := range batch.Vulnerable {
-			key := componentKey(vuln.Vendor, vuln.Product, vuln.InstalledVersion)
-			locs := affectedMap[key]
-			vuln.LocalID = strings.Join(locs, ",")
-			newVulns = append(newVulns, vuln)
-			for _, loc := range locs {
-				entry := merged.locationEntry(loc)
-				entry.Vulnerable = append(entry.Vulnerable, vuln)
-			}
-		}
-		for _, unm := range batch.Unmatched {
-			key := componentKey(unm.Vendor, unm.Product, unm.InstalledVersion)
-			locs := affectedMap[key]
-			unm.LocalID = strings.Join(locs, ",")
-			newUnmatched = append(newUnmatched, unm)
-			for _, loc := range locs {
-				entry := merged.locationEntry(loc)
-				entry.Unmatched = append(entry.Unmatched, unm)
-			}
+		if len(results) != len(batchKeys) {
+			return nil, fmt.Errorf("rozhanitsy: got %d results for %d packages", len(results), len(batchKeys))
 		}
 
-		merged.Vulnerable = append(merged.Vulnerable, newVulns...)
-		merged.Unmatched = append(merged.Unmatched, newUnmatched...)
-		merged.CheckedAt = batch.CheckedAt
+		for i, key := range batchKeys {
+			comp := unique[key]
+			locs := locations[key]
+			localID := strings.Join(locs, ",")
+
+			hasHigh, hasLow := false, false
+			for _, v := range results[i].Vulnerabilities {
+				if v.Confidence == "low" {
+					hasLow = true
+					continue
+				}
+				hasHigh = true
+				if v.CVSSScore < minScore || (len(allowed) > 0 && !allowed[strings.ToUpper(v.Severity)]) {
+					continue
+				}
+				vuln := Vulnerability{
+					Vendor:           comp.Vendor,
+					Product:          comp.Product,
+					LocalID:          localID,
+					InstalledVersion: comp.Version,
+					CVEID:            v.ID,
+					CVSSScore:        v.CVSSScore,
+					CVSSSeverity:     v.Severity,
+				}
+				merged.Vulnerable = append(merged.Vulnerable, vuln)
+				for _, loc := range locs {
+					entry := merged.locationEntry(loc)
+					entry.Vulnerable = append(entry.Vulnerable, vuln)
+				}
+			}
+
+			if hasLow && !hasHigh {
+				unm := UnmatchedComponent{Vendor: comp.Vendor, Product: comp.Product, InstalledVersion: comp.Version, LocalID: localID}
+				merged.Unmatched = append(merged.Unmatched, unm)
+				for _, loc := range locs {
+					entry := merged.locationEntry(loc)
+					entry.Unmatched = append(entry.Unmatched, unm)
+				}
+			}
+		}
+		merged.CheckedAt = time.Now()
 	}
 
 	return merged, nil
 }
 
-func (c *Client) checkVulnsBatch(ctx context.Context, components []Component, minScore float64, severities []string, confidence string) (*CheckResponse, error) {
-	reqBody, err := json.Marshal(CheckRequest{Components: components, MinScore: minScore, Severities: severities, Confidence: confidence})
+// checkBatch posts one batch, retrying while the server rate-limits (429).
+func (c *Client) checkBatch(ctx context.Context, packages []batchPackage, includeLow bool) ([]checkResult, error) {
+	reqBody, err := json.Marshal(batchRequest{Packages: packages, IncludeLowConfidence: includeLow})
 	if err != nil {
 		return nil, fmt.Errorf("rozhanitsy: encoding request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/api/vulns/check", bytes.NewReader(reqBody))
-	if err != nil {
-		return nil, fmt.Errorf("rozhanitsy: building request: %w", err)
+	for attempt := 0; ; attempt++ {
+		results, retryAfter, err := c.postBatch(ctx, reqBody)
+		if err == nil {
+			return results, nil
+		}
+		var apiErr *APIError
+		if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusTooManyRequests || attempt >= maxRetries {
+			return nil, err
+		}
+		select {
+		case <-time.After(retryAfter):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+c.Token)
+}
+
+func (c *Client) postBatch(ctx context.Context, reqBody []byte) ([]checkResult, time.Duration, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/api/v1/check/batch", bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, 0, fmt.Errorf("rozhanitsy: building request: %w", err)
+	}
+	if c.Token != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.Token)
+	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
 
 	resp, err := c.HTTP.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("rozhanitsy: request failed: %w", err)
+		return nil, 0, fmt.Errorf("rozhanitsy: request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("rozhanitsy: reading response: %w", err)
+		return nil, 0, fmt.Errorf("rozhanitsy: reading response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(body)}
+		return nil, retryDelay(resp), &APIError{StatusCode: resp.StatusCode, Body: string(body)}
 	}
 
-	var result CheckResponse
-	result.ByLocation = make(map[string]*LocationReport)
+	var result batchResponse
 	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("rozhanitsy: decoding response: %w", err)
+		return nil, 0, fmt.Errorf("rozhanitsy: decoding response: %w", err)
 	}
 
-	return &result, nil
+	return result.Data, 0, nil
+}
+
+// retryDelay honors Retry-After (seconds) and otherwise waits a second, the rate limit being per minute.
+func retryDelay(resp *http.Response) time.Duration {
+	if secs, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	return time.Second
 }

@@ -7,6 +7,11 @@ version:
   - file: app/AppKernel.php
     regex: 'const VERSION\s*=\s*[''"]([^''"]+)[''"]'
 plugins:
-  glob: "modules/*"
-  version_file: "config.xml"
-  version_regex: '<version><!\[CDATA\[([^\]]+)\]\]></version>'
+  - glob: "modules/*"
+    version:
+      - file: "config.xml"
+        regex: '<version><!\[CDATA\[([^\]]+)\]\]></version>'
+  - glob: "themes/*"
+    version:
+      - file: "config/theme.yml"
+        regex: '(?m)^version:\s*[''"]?([^''"\s]+)'

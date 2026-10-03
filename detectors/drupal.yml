@@ -5,6 +5,14 @@ version:
   - file: core/lib/Drupal.php
     regex: 'const VERSION\s*=\s*[''"]([^''"]+)[''"]'
 plugins:
-  glob: "modules/*/*"
-  version_file: "module.info.yml"
-  version_regex: 'version:\s*([0-9.]+)'
+  # Accepts 1.2.3, 8.x-1.0 and 1.0.x-dev style versions.
+  - glob: "modules/*"
+    version: &info
+      - file: "*.info.yml"
+        regex: '(?m)^version:\s*[''"]?([^''"\s]+)'
+  - glob: "modules/*/*"
+    version: *info
+  - glob: "themes/*"
+    version: *info
+  - glob: "themes/*/*"
+    version: *info

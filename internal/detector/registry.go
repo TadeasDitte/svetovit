@@ -8,16 +8,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-
 type Registry struct {
 	detectors []*Detector
 }
 
-
 func (r *Registry) All() []*Detector {
 	return r.detectors
 }
-
 
 func LoadFS(fsys fs.FS) (*Registry, error) {
 	entries, err := fs.ReadDir(fsys, ".")
@@ -46,6 +43,10 @@ func LoadFS(fsys fs.FS) (*Registry, error) {
 		}
 		if d.Name == "" {
 			return nil, fmt.Errorf("%s: missing required \"name\" field", name)
+		}
+
+		if err := d.compile(); err != nil {
+			return nil, fmt.Errorf("%s: %w", name, err)
 		}
 
 		reg.detectors = append(reg.detectors, &d)
