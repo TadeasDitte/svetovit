@@ -149,13 +149,13 @@ func printVulnerable(w io.Writer, vulnerable []rozhanitsy.Vulnerability, omitLoc
 		fmt.Fprintln(tw, "SEVERITY\tCVSS\tPRODUCT\tVERSION\tCVE")
 		for _, v := range vulns {
 			fmt.Fprintf(tw, "%s\t%.1f\t%s\t%s\t%s\n",
-				v.CVSSSeverity, v.CVSSScore, v.Product, v.InstalledVersion, v.CVEID)
+				v.CVSSSeverity, v.CVSSScore, productName(v), v.InstalledVersion, v.CVEID)
 		}
 	} else {
 		fmt.Fprintln(tw, "SEVERITY\tCVSS\tPRODUCT\tVERSION\tCVE\tLOCATION(S)")
 		for _, v := range vulns {
 			fmt.Fprintf(tw, "%s\t%.1f\t%s\t%s\t%s\t%s\n",
-				v.CVSSSeverity, v.CVSSScore, v.Product, v.InstalledVersion, v.CVEID, v.LocalID)
+				v.CVSSSeverity, v.CVSSScore, productName(v), v.InstalledVersion, v.CVEID, v.LocalID)
 		}
 	}
 	tw.Flush()
@@ -250,4 +250,12 @@ func suffix(n int) string {
 		return ""
 	}
 	return "s"
+}
+
+// productName shows the vendor when it is known, so same-named products from different vendors differ.
+func productName(v rozhanitsy.Vulnerability) string {
+	if v.Vendor == "" || v.Vendor == v.Product {
+		return v.Product
+	}
+	return v.Vendor + "/" + v.Product
 }

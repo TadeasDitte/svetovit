@@ -235,62 +235,74 @@ func (c *Client) CheckVulns(ctx context.Context, components []Component, minScor
 	return merged, nil
 }
 
-// checkBatch posts one batch, retrying while the server rate-limits (429).
+// checkBatch posts one batch.
 func (c *Client) checkBatch(ctx context.Context, packages []batchPackage, includeLow bool) ([]checkResult, error) {
 	reqBody, err := json.Marshal(batchRequest{Packages: packages, IncludeLowConfidence: includeLow})
 	if err != nil {
 		return nil, fmt.Errorf("rozhanitsy: encoding request: %w", err)
 	}
+	var result batchResponse
+	if err := c.do(ctx, http.MethodPost, "/api/v1/check/batch", reqBody, &result); err != nil {
+		return nil, err
+	}
+	return result.Data, nil
+}
 
+// do sends one API request and decodes the JSON reply into out, retrying while the server
+// rate-limits (429).
+func (c *Client) do(ctx context.Context, method, path string, body []byte, out any) error {
 	for attempt := 0; ; attempt++ {
-		results, retryAfter, err := c.postBatch(ctx, reqBody)
+		retryAfter, err := c.doOnce(ctx, method, path, body, out)
 		if err == nil {
-			return results, nil
+			return nil
 		}
 		var apiErr *APIError
 		if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusTooManyRequests || attempt >= maxRetries {
-			return nil, err
+			return err
 		}
 		select {
 		case <-time.After(retryAfter):
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return ctx.Err()
 		}
 	}
 }
 
-func (c *Client) postBatch(ctx context.Context, reqBody []byte) ([]checkResult, time.Duration, error) {
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/api/v1/check/batch", bytes.NewReader(reqBody))
+func (c *Client) doOnce(ctx context.Context, method, path string, body []byte, out any) (time.Duration, error) {
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, reader)
 	if err != nil {
-		return nil, 0, fmt.Errorf("rozhanitsy: building request: %w", err)
+		return 0, fmt.Errorf("rozhanitsy: building request: %w", err)
 	}
 	if c.Token != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+c.Token)
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
+	if body != nil {
+		httpReq.Header.Set("Content-Type", "application/json")
+	}
 	httpReq.Header.Set("Accept", "application/json")
 
 	resp, err := c.HTTP.Do(httpReq)
 	if err != nil {
-		return nil, 0, fmt.Errorf("rozhanitsy: request failed: %w", err)
+		return 0, fmt.Errorf("rozhanitsy: request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, 0, fmt.Errorf("rozhanitsy: reading response: %w", err)
+		return 0, fmt.Errorf("rozhanitsy: reading response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, retryDelay(resp), &APIError{StatusCode: resp.StatusCode, Body: string(body)}
+		return retryDelay(resp), &APIError{StatusCode: resp.StatusCode, Body: string(data)}
 	}
-
-	var result batchResponse
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, 0, fmt.Errorf("rozhanitsy: decoding response: %w", err)
+	if err := json.Unmarshal(data, out); err != nil {
+		return 0, fmt.Errorf("rozhanitsy: decoding response: %w", err)
 	}
-
-	return result.Data, 0, nil
+	return 0, nil
 }
 
 // retryDelay honors Retry-After (seconds) and otherwise waits a second, the rate limit being per minute.

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -103,6 +104,8 @@ func run(args []string) int {
 		return 1
 	}
 
+	annotateVendors(client, resp)
+
 	var sys *report.System
 	if !*skipSystem {
 		sys, err = checkSystem(client, *minScore, severities, confidenceMode != "bounded")
@@ -181,6 +184,11 @@ func checkSystem(client *rozhanitsy.Client, minScore float64, severities []strin
 		return nil, fmt.Errorf("checking system packages: %w", err)
 	}
 
+	if env.Manager == system.Nix {
+		resp = refineWithNixCPEs(client, components, resp, minScore, severities, includeLow)
+	}
+	annotateVendors(client, resp)
+
 	return &report.System{Name: env.Name, Ecosystem: env.Ecosystem, Response: resp}, nil
 }
 
@@ -208,4 +216,56 @@ func writeReportFile(path string, write func(io.Writer) error) error {
 	}
 	defer f.Close()
 	return write(f)
+}
+
+// refineWithNixCPEs re-checks flagged NixOS packages under the exact vendor/product nixpkgs records
+// for them. A bare name like "orc" also matches unrelated NVD products (Apache ORC); the CPE
+// picks the right one. Packages nixpkgs has no CPE for keep their bare-name results.
+func refineWithNixCPEs(client *rozhanitsy.Client, components []rozhanitsy.Component, resp *rozhanitsy.CheckResponse, minScore float64, severities []string, includeLow bool) *rozhanitsy.CheckResponse {
+	flagged := make(map[string]bool)
+	for _, v := range resp.Vulnerable {
+		flagged[v.Product] = true
+	}
+	names := make([]string, 0, len(flagged))
+	for name := range flagged {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	cpes, err := system.NixCPEs(names)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "svetovit: %v; keeping name-only matches\n", err)
+		return resp
+	}
+	if len(cpes) == 0 {
+		return resp
+	}
+
+	var refined []rozhanitsy.Component
+	for _, c := range components {
+		if cpe, ok := cpes[c.Product]; ok {
+			c.Vendor, c.Product = cpe.Vendor, cpe.Product
+			refined = append(refined, c)
+		}
+	}
+	rechecked, err := client.CheckVulns(context.Background(), refined, minScore, severities, includeLow)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "svetovit: rechecking with nixpkgs CPEs: %v; keeping name-only matches\n", err)
+		return resp
+	}
+
+	resp.Remove(func(product string) bool { _, ok := cpes[product]; return ok })
+	resp.Merge(rechecked)
+	return resp
+}
+
+// annotateVendors names the vendor behind each name-only match, so same-named products differ in the report.
+func annotateVendors(client *rozhanitsy.Client, resp *rozhanitsy.CheckResponse) {
+	skipped, err := client.AnnotateVendors(context.Background(), resp)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "svetovit: vendor lookup: %v\n", err)
+	}
+	if skipped > 0 {
+		fmt.Fprintf(os.Stderr, "svetovit: vendor not looked up for %d findings (lookup limit)\n", skipped)
+	}
 }
