@@ -174,7 +174,11 @@ func printUnmatched(w io.Writer, unmatched []rozhanitsy.UnmatchedComponent) {
 		if u.Vendor != "" {
 			name = u.Vendor + "/" + u.Product
 		}
-		fmt.Fprintf(w, "  - %s (%s)\n", name, u.LocalID)
+		note := ""
+		if u.Ambiguous {
+			note = " [ambiguous name, several vendors]"
+		}
+		fmt.Fprintf(w, "  - %s (%s)%s\n", name, u.LocalID, note)
 	}
 }
 

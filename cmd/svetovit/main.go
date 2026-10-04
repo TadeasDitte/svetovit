@@ -107,8 +107,6 @@ func run(args []string) int {
 		return 1
 	}
 
-	annotateVendors(client, resp)
-
 	var sys *report.System
 	if !*skipSystem {
 		sys, err = checkSystem(client, *minScore, severities, confidenceMode != "bounded")
@@ -190,7 +188,6 @@ func checkSystem(client *rozhanitsy.Client, minScore float64, severities []strin
 	if env.Manager == system.Nix {
 		resp = refineWithNixCPEs(client, components, resp, minScore, severities, includeLow)
 	}
-	annotateVendors(client, resp)
 
 	return &report.System{Name: env.Name, Ecosystem: env.Ecosystem, Response: resp}, nil
 }
@@ -229,6 +226,11 @@ func refineWithNixCPEs(client *rozhanitsy.Client, components []rozhanitsy.Compon
 	for _, v := range resp.Vulnerable {
 		flagged[v.Product] = true
 	}
+	for _, u := range resp.Unmatched {
+		if u.Ambiguous {
+			flagged[u.Product] = true
+		}
+	}
 	names := make([]string, 0, len(flagged))
 	for name := range flagged {
 		names = append(names, name)
@@ -260,15 +262,4 @@ func refineWithNixCPEs(client *rozhanitsy.Client, components []rozhanitsy.Compon
 	resp.Remove(func(product string) bool { _, ok := cpes[product]; return ok })
 	resp.Merge(rechecked)
 	return resp
-}
-
-// annotateVendors names the vendor behind each name-only match, so same-named products differ in the report.
-func annotateVendors(client *rozhanitsy.Client, resp *rozhanitsy.CheckResponse) {
-	skipped, err := client.AnnotateVendors(context.Background(), resp)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "svetovit: vendor lookup: %v\n", err)
-	}
-	if skipped > 0 {
-		fmt.Fprintf(os.Stderr, "svetovit: vendor not looked up for %d findings (lookup limit)\n", skipped)
-	}
 }

@@ -107,36 +107,27 @@ func TestNVDOnlyDropsOSVAdvisories(t *testing.T) {
 	}
 }
 
-func TestAnnotateVendorsUsesDetailsEndpointOnce(t *testing.T) {
-	var lookups atomic.Int32
+func TestCheckVulnsTakesVendorFromAffectedRangeAndFlagsAmbiguous(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v1/vulnerabilities/CVE-1":
-			lookups.Add(1)
-			fmt.Fprint(w, `{"data":[{"affected":[{"vendor":"knplabs","product":"snappy"},{"vendor":"other","product":"unrelated"}]}]}`)
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
+		fmt.Fprint(w, `{"data":[
+			{"product":"snappy","vulnerable":true,"ambiguous":false,"vulnerabilities":[
+				{"id":"CVE-1","cvss_score":7,"severity":"HIGH","confidence":"high","fixed_in":"1.2","affected_range":{"vendor":"knplabs","product":"snappy"}}]},
+			{"product":"orc","vulnerable":null,"ambiguous":true,"candidates":[{"vendor":"apache"},{"vendor":"other"}],"vulnerabilities":[]}]}`)
 	}))
 	defer srv.Close()
 
-	vuln := Vulnerability{Product: "snappy", CVEID: "CVE-1", LocalID: "/a"}
-	resp := &CheckResponse{
-		Vulnerable: []Vulnerability{vuln, {Product: "snappy", CVEID: "CVE-1", LocalID: "/b"}, {Product: "x", CVEID: "CVE-GONE"}},
-		ByLocation: map[string]*LocationReport{"/a": {Vulnerable: []Vulnerability{vuln}}},
+	resp, err := New(srv.URL, "").CheckVulns(context.Background(), []Component{
+		{Product: "snappy", Version: "1", LocalID: "/a"},
+		{Product: "orc", Version: "1", LocalID: "/a"},
+	}, 0, nil, false)
+	if err != nil {
+		t.Fatal(err)
 	}
-	skipped, err := New(srv.URL, "").AnnotateVendors(context.Background(), resp)
-	if err != nil || skipped != 0 {
-		t.Fatalf("skipped=%d err=%v", skipped, err)
+	if len(resp.Vulnerable) != 1 || resp.Vulnerable[0].Vendor != "knplabs" || resp.Vulnerable[0].FixedIn != "1.2" {
+		t.Errorf("unexpected vulnerable: %+v", resp.Vulnerable)
 	}
-	if resp.Vulnerable[0].Vendor != "knplabs" || resp.Vulnerable[1].Vendor != "knplabs" || resp.ByLocation["/a"].Vulnerable[0].Vendor != "knplabs" {
-		t.Errorf("vendor not annotated: %+v", resp)
-	}
-	if resp.Vulnerable[2].Vendor != "" {
-		t.Errorf("unknown CVE should stay blank: %+v", resp.Vulnerable[2])
-	}
-	if lookups.Load() != 1 {
-		t.Errorf("want 1 details lookup for CVE-1, got %d", lookups.Load())
+	if len(resp.Unmatched) != 1 || resp.Unmatched[0].Product != "orc" || !resp.Unmatched[0].Ambiguous {
+		t.Errorf("ambiguous product not reported as unmatched: %+v", resp.Unmatched)
 	}
 }
 
