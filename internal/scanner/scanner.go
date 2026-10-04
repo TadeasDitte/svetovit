@@ -20,6 +20,9 @@ type Component struct {
 	Version   string
 	Ecosystem string
 	LocalID   string
+
+	// Platform is the CMS an extension belongs to; empty for the CMS itself and for lock file packages.
+	Platform string
 }
 
 // skipDirs are never searched: they hold dependencies' own lock files and projects, not the site's.
@@ -245,9 +248,10 @@ func (s *Scanner) scanSite(site string) []Component {
 
 		for _, p := range plugins {
 			components = append(components, Component{
-				Product: p.Name,
-				Version: p.Version,
-				LocalID: p.Path,
+				Product:  p.Name,
+				Version:  p.Version,
+				LocalID:  p.Path,
+				Platform: d.Name,
 			})
 		}
 	}

@@ -147,3 +147,44 @@ func TestRemoveAndMerge(t *testing.T) {
 		t.Errorf("unexpected by-location: %+v", got)
 	}
 }
+
+func TestCheckVulnsResolvesAmbiguousCandidates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req batchRequest
+		json.NewDecoder(r.Body).Decode(&req)
+		out := batchResponse{}
+		for _, p := range req.Packages {
+			res := checkResult{Product: p.Product}
+			switch p.Vendor {
+			case "":
+				res.Ambiguous = true
+				res.Candidates = []candidate{{Vendor: "automattic"}, {Vendor: "other"}}
+			case "automattic":
+				v := apiVulnerability{ID: "CVE-1", CVSSScore: 6, Severity: "MEDIUM", Confidence: "high"}
+				v.AffectedRange.PlugsInto = "wordpress"
+				res.Vulnerabilities = []apiVulnerability{v}
+			case "other":
+				res.Vulnerabilities = []apiVulnerability{{ID: "CVE-2", CVSSScore: 9, Severity: "CRITICAL", Confidence: "high"}, {ID: "CVE-3", Confidence: "low"}}
+			}
+			out.Data = append(out.Data, res)
+		}
+		json.NewEncoder(w).Encode(out)
+	}))
+	defer srv.Close()
+
+	comps := []Component{
+		{Product: "akismet", Version: "3", LocalID: "/a", ResolveAmbiguous: true, Platform: "wordpress"},
+		{Product: "akismet", Version: "3", LocalID: "/b", ResolveAmbiguous: true, Platform: "wordpress"},
+		{Product: "orc", Version: "1", LocalID: "/s"},
+	}
+	resp, err := New(srv.URL, "").CheckVulns(context.Background(), comps, 0, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Vulnerable) != 1 || resp.Vulnerable[0].Vendor != "automattic" || resp.Vulnerable[0].LocalID != "/a,/b" {
+		t.Errorf("unexpected vulnerable: %+v", resp.Vulnerable)
+	}
+	if len(resp.Unmatched) != 1 || resp.Unmatched[0].Product != "orc" {
+		t.Errorf("only the non-resolvable component should stay unmatched: %+v", resp.Unmatched)
+	}
+}
