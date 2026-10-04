@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/TadeasDitte/svetovit/compare/v1.2.0...v1.3.0) (2026-10-04)
+
+
+### Features
+
+* enhance retry logic to handle 5xx and network errors; add tests for server error retries ([ed11a0e](https://github.com/TadeasDitte/svetovit/commit/ed11a0eafabd6c1201cddadd2fda9922d815d59a))
+
 ## [1.2.0](https://github.com/TadeasDitte/svetovit/compare/v1.1.0...v1.2.0) (2026-10-04)
 
 
