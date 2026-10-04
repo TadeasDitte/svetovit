@@ -26,8 +26,15 @@ jobs:
       - name: Build
         run: go build ./...
 
+      - name: Vet
+        run: go vet ./...
+
       - name: Test
-        run: go test ./...
+        run: go test -count=1 -cover ./...
+
+      - name: Test (race detector)
+        if: runner.os == 'Linux'
+        run: go test -count=1 -race ./...
 
   cross-build:
     name: build (${{ matrix.goos }}/${{ matrix.goarch }})

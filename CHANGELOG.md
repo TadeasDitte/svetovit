@@ -24,7 +24,7 @@
 
 ### Features
 
-* add more partially ai slop. add outputting sorted by location, option to output stdout as json or only errors in stderr ([815f926](https://github.com/TadeasDitte/svetovit/commit/815f9264f3b6288d7a6ae1255cc92775d5c93f1d))
+* add output sorted by location, option to output stdout as json or only errors in stderr ([1dc87fa](https://github.com/TadeasDitte/svetovit/commit/1dc87fae28c88fe8fee5a3bab6fa42459d38813e))
 * added [#1](https://github.com/TadeasDitte/svetovit/issues/1) ([e417563](https://github.com/TadeasDitte/svetovit/commit/e41756376ee72c7095f8d82a15b7ecb4877b828f))
 * added auto releases ([6d994e5](https://github.com/TadeasDitte/svetovit/commit/6d994e50d61844cfb4f36bb0f23257c51dbdd07c))
 * added flags ([a91bb96](https://github.com/TadeasDitte/svetovit/commit/a91bb96d1b7082cdafca763bc20b83e20a64fd07))
@@ -37,7 +37,7 @@
 * implemented array thingi ([cff3026](https://github.com/TadeasDitte/svetovit/commit/cff3026d69312042f6cf9608146b1a00673fe4d9))
 * init go project ([a8b1e22](https://github.com/TadeasDitte/svetovit/commit/a8b1e2271b0ecb71212e27b5685a592a42b0acd5))
 * laravel detector ([f7c2b29](https://github.com/TadeasDitte/svetovit/commit/f7c2b292ddb8e65d8b29927a4094854017cc8076))
-* layered more ai slop over ai slop to pass quality check on sonarqube :3 ([272bf0e](https://github.com/TadeasDitte/svetovit/commit/272bf0ee332c2447ec6fb202a8f36bf6a7b8af8e))
+* refactor code to pass sonarqube quality check :3 ([d8b2e43](https://github.com/TadeasDitte/svetovit/commit/d8b2e437c7d8e70d0ba0538d84194e6eac6fd3f2))
 * now can read .env ([85bf901](https://github.com/TadeasDitte/svetovit/commit/85bf901efd007e00d4b870fbe1301818ba0372b2))
 * prestashop ([5226317](https://github.com/TadeasDitte/svetovit/commit/5226317b9190c619bdd82966bc530390a55e2f58))
 * random AI slop i made for prototype version, now fix it shad0woot UwU ([d3fffe4](https://github.com/TadeasDitte/svetovit/commit/d3fffe497f6c88fd390b850c7bc1412a40e4b838))
@@ -47,7 +47,7 @@
 
 ### Features
 
-* add more partially ai slop. add outputting sorted by location, option to output stdout as json or only errors in stderr ([815f926](https://github.com/TadeasDitte/svetovit/commit/815f9264f3b6288d7a6ae1255cc92775d5c93f1d))
+* add output sorted by location, option to output stdout as json or only errors in stderr ([1dc87fa](https://github.com/TadeasDitte/svetovit/commit/1dc87fae28c88fe8fee5a3bab6fa42459d38813e))
 * added [#1](https://github.com/TadeasDitte/svetovit/issues/1) ([e417563](https://github.com/TadeasDitte/svetovit/commit/e41756376ee72c7095f8d82a15b7ecb4877b828f))
 * added auto releases ([6d994e5](https://github.com/TadeasDitte/svetovit/commit/6d994e50d61844cfb4f36bb0f23257c51dbdd07c))
 * added flags ([a91bb96](https://github.com/TadeasDitte/svetovit/commit/a91bb96d1b7082cdafca763bc20b83e20a64fd07))
@@ -60,7 +60,7 @@
 * implemented array thingi ([cff3026](https://github.com/TadeasDitte/svetovit/commit/cff3026d69312042f6cf9608146b1a00673fe4d9))
 * init go project ([a8b1e22](https://github.com/TadeasDitte/svetovit/commit/a8b1e2271b0ecb71212e27b5685a592a42b0acd5))
 * laravel detector ([f7c2b29](https://github.com/TadeasDitte/svetovit/commit/f7c2b292ddb8e65d8b29927a4094854017cc8076))
-* layered more ai slop over ai slop to pass quality check on sonarqube :3 ([272bf0e](https://github.com/TadeasDitte/svetovit/commit/272bf0ee332c2447ec6fb202a8f36bf6a7b8af8e))
+* refactor code to pass sonarqube quality check :3 ([d8b2e43](https://github.com/TadeasDitte/svetovit/commit/d8b2e437c7d8e70d0ba0538d84194e6eac6fd3f2))
 * now can read .env ([85bf901](https://github.com/TadeasDitte/svetovit/commit/85bf901efd007e00d4b870fbe1301818ba0372b2))
 * prestashop ([5226317](https://github.com/TadeasDitte/svetovit/commit/5226317b9190c619bdd82966bc530390a55e2f58))
 * random AI slop i made for prototype version, now fix it shad0woot UwU ([d3fffe4](https://github.com/TadeasDitte/svetovit/commit/d3fffe497f6c88fd390b850c7bc1412a40e4b838))
