@@ -86,11 +86,13 @@ func run(args []string) int {
 	apiComponents := make([]rozhanitsy.Component, len(components))
 	for i, c := range components {
 		apiComponents[i] = rozhanitsy.Component{
-			Vendor:    c.Vendor,
-			Product:   c.Product,
-			Version:   c.Version,
-			Ecosystem: c.Ecosystem,
-			LocalID:   c.LocalID,
+			Vendor:           c.Vendor,
+			Product:          c.Product,
+			Version:          c.Version,
+			Ecosystem:        c.Ecosystem,
+			LocalID:          c.LocalID,
+			ResolveAmbiguous: true,
+			Platform:         c.Platform,
 		}
 	}
 

@@ -31,6 +31,18 @@ type Component struct {
 	// NVDOnly ignores OSV advisories for this component. OSV records are scoped to a distro or ecosystem
 	// whose version ranges mean nothing for a component that has no ecosystem to compare against.
 	NVDOnly bool `json:"-"`
+
+	// ResolveAmbiguous re-checks the component under each vendor or ecosystem the API offers when its
+	// name is ambiguous. Only for components known to belong to one product family (CMS extensions);
+	// a bare OS package name could pull in unrelated software.
+	ResolveAmbiguous bool `json:"-"`
+
+	// Platform is the CMS an extension plugs into. Findings for an extension without a vendor are only
+	// believed when the API says the vulnerable range plugs into that platform; otherwise a generic
+	// name like "gallery" would match every unrelated vendor that ships one.
+	Platform string `json:"-"`
+
+	requirePlatform bool // set on candidate re-checks, which carry a vendor of their own
 }
 
 // requestKey identifies a component to send; identical components found at several locations are
@@ -60,8 +72,14 @@ type apiVulnerability struct {
 	FixedIn    string  `json:"fixed_in"`
 
 	AffectedRange struct {
-		Vendor string `json:"vendor"`
+		Vendor    string `json:"vendor"`
+		PlugsInto string `json:"plugs_into"`
 	} `json:"affected_range"`
+}
+
+type candidate struct {
+	Vendor    string `json:"vendor"`
+	Ecosystem string `json:"ecosystem"`
 }
 
 type checkResult struct {
@@ -69,6 +87,7 @@ type checkResult struct {
 	Product         string             `json:"product"`
 	Version         string             `json:"version"`
 	Ambiguous       bool               `json:"ambiguous"`
+	Candidates      []candidate        `json:"candidates"`
 	Vulnerabilities []apiVulnerability `json:"vulnerabilities"`
 }
 
@@ -179,6 +198,7 @@ func (c *Client) CheckVulns(ctx context.Context, components []Component, minScor
 		locations[key] = append(locations[key], comp.LocalID)
 	}
 
+	var followUps []Component
 	for start := 0; start < len(keys); start += maxComponentsPerRequest {
 		end := min(start+maxComponentsPerRequest, len(keys))
 		batchKeys := keys[start:end]
@@ -202,9 +222,21 @@ func (c *Client) CheckVulns(ctx context.Context, components []Component, minScor
 			locs := locations[key]
 			localID := strings.Join(locs, ",")
 
+			if results[i].Ambiguous && comp.ResolveAmbiguous && comp.Platform != "" && len(results[i].Candidates) > 0 {
+				for _, cand := range results[i].Candidates {
+					for _, loc := range locs {
+						followUps = append(followUps, Component{Vendor: cand.Vendor, Product: comp.Product, Version: comp.Version, Ecosystem: cand.Ecosystem, LocalID: loc, NVDOnly: comp.NVDOnly, Platform: comp.Platform, requirePlatform: true})
+					}
+				}
+				continue
+			}
+
 			hasHigh, hasLow := false, results[i].Ambiguous
 			for _, v := range results[i].Vulnerabilities {
 				if comp.NVDOnly && v.Source != "nvd" {
+					continue
+				}
+				if (comp.requirePlatform || comp.Platform != "" && comp.Vendor == "") && !strings.EqualFold(v.AffectedRange.PlugsInto, comp.Platform) {
 					continue
 				}
 				if v.Confidence == "low" {
@@ -246,6 +278,14 @@ func (c *Client) CheckVulns(ctx context.Context, components []Component, minScor
 			}
 		}
 		merged.CheckedAt = time.Now()
+	}
+
+	if len(followUps) > 0 {
+		resolved, err := c.CheckVulns(ctx, followUps, minScore, severities, includeLow)
+		if err != nil {
+			return nil, err
+		}
+		merged.Merge(resolved)
 	}
 
 	return merged, nil
