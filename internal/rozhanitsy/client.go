@@ -16,7 +16,7 @@ import (
 // maxComponentsPerRequest is the batch endpoint's limit.
 const maxComponentsPerRequest = 100
 
-// maxRetries is how many times a rate-limited (429) request is retried.
+// maxRetries is how many times a request is retried after a 429, a 5xx or a network error.
 const maxRetries = 5
 
 const keySep = "\x1f"
@@ -161,6 +161,10 @@ type Client struct {
 	// Token is optional: the API is public, but a bearer token is sent when one is set.
 	Token string
 	HTTP  *http.Client
+
+	// RetryBackoff is the first wait before retrying a 5xx or network error; it doubles per attempt.
+	// Zero means one second.
+	RetryBackoff time.Duration
 }
 
 func New(baseURL, token string) *Client {
@@ -305,7 +309,7 @@ func (c *Client) checkBatch(ctx context.Context, packages []batchPackage, includ
 }
 
 // do sends one API request and decodes the JSON reply into out, retrying while the server
-// rate-limits (429).
+// rate-limits (429), fails (5xx) or cannot be reached.
 func (c *Client) do(ctx context.Context, method, path string, body []byte, out any) error {
 	for attempt := 0; ; attempt++ {
 		retryAfter, err := c.doOnce(ctx, method, path, body, out)
@@ -313,7 +317,16 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte, out a
 			return nil
 		}
 		var apiErr *APIError
-		if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusTooManyRequests || attempt >= maxRetries {
+		var netErr *transportError
+		switch {
+		case errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusTooManyRequests:
+			// retryAfter already holds the server's Retry-After.
+		case errors.As(err, &apiErr) && apiErr.StatusCode >= 500, errors.As(err, &netErr):
+			retryAfter = c.backoff(attempt)
+		default:
+			return err
+		}
+		if attempt >= maxRetries {
 			return err
 		}
 		select {
@@ -343,13 +356,16 @@ func (c *Client) doOnce(ctx context.Context, method, path string, body []byte, o
 
 	resp, err := c.HTTP.Do(httpReq)
 	if err != nil {
-		return 0, fmt.Errorf("rozhanitsy: request failed: %w", err)
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
+		}
+		return 0, &transportError{fmt.Errorf("rozhanitsy: request failed: %w", err)}
 	}
 	defer resp.Body.Close()
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return 0, fmt.Errorf("rozhanitsy: reading response: %w", err)
+		return 0, &transportError{fmt.Errorf("rozhanitsy: reading response: %w", err)}
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -359,6 +375,20 @@ func (c *Client) doOnce(ctx context.Context, method, path string, body []byte, o
 		return 0, fmt.Errorf("rozhanitsy: decoding response: %w", err)
 	}
 	return 0, nil
+}
+
+// transportError is a failure to get any HTTP response (connection reset, timeout); worth retrying.
+type transportError struct{ err error }
+
+func (e *transportError) Error() string { return e.err.Error() }
+func (e *transportError) Unwrap() error { return e.err }
+
+func (c *Client) backoff(attempt int) time.Duration {
+	base := c.RetryBackoff
+	if base <= 0 {
+		base = time.Second
+	}
+	return base << attempt
 }
 
 // retryDelay honors Retry-After (seconds) and otherwise waits a second, the rate limit being per minute.
