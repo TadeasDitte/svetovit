@@ -7,12 +7,10 @@ version:
     regex: '\$wp_version\s*=\s*[''"]([^''"]+)[''"]'
 
 plugins:
-  # Installed version lives in the main plugin file header; readme "Stable tag" is the latest release
-  # and only a fallback.
   - glob: "wp-content/plugins/*"
     version:
       - file: "*.php"
-        regex: '(?mi)^[ \t/*#@]*Version:[ \t]*([^\s*]+)'
+        regex: '(?i)Plugin Name:(?:[^*]|\*+[^*/])*?\n[ \t/*#@]*Version:[ \t]*([^\s*]+)'
       - file: "readme.txt"
         regex: '(?i)Stable tag:\s*([0-9][^\s]*)'
   - glob: "wp-content/themes/*"
