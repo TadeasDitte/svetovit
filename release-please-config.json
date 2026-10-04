@@ -3,7 +3,6 @@
   "packages": {
     ".": {
       "release-type": "go",
-      "package-name": "svetovit",
       "bump-minor-pre-major": true
     }
   }
