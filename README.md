@@ -97,3 +97,12 @@ extension versions from). Drop in a new file and it is picked up automatically.
 ```bash
 go test ./...
 ```
+
+## Contributors
+
+<a href="https://github.com/TadeasDitte" title="TadeasDitte">
+  <img src="https://github.com/TadeasDitte.png?size=100" width="50" height="50" alt="TadeasDitte">
+</a>
+<a href="https://github.com/shad0wRoot" title="shad0wRoot">
+  <img src="https://github.com/shad0wRoot.png?size=100" width="50" height="50" alt="shad0wRoot">
+</a>
