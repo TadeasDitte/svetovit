@@ -183,3 +183,19 @@ func extractVersion(path string, re *regexp.Regexp) (string, error) {
 
 	return string(match[1]), nil
 }
+
+// DetectIn is Detect for callers that already listed root: has reports whether a name exists directly
+// in it. A marker is only stat-ed when its first path segment is present, which skips the filesystem
+// for almost every directory of a large tree.
+func (d *Detector) DetectIn(root string, has func(name string) bool) bool {
+	for _, marker := range d.Markers {
+		first, _, _ := strings.Cut(filepath.ToSlash(marker), "/")
+		if !has(first) {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(root, marker)); err == nil {
+			return true
+		}
+	}
+	return false
+}

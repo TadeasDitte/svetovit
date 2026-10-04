@@ -22,6 +22,7 @@ Usage of svetovit:
       --skip-system         don't check the host's OS packages (dpkg, rpm, apk, pacman, nix, FreeBSD pkg)
   -t, --target string       path to the directory to scan (default ".")
       --timeout duration    HTTP request timeout (default 30s)
+      --workers int         max concurrent filesystem operations while scanning (0 = automatic)
   -T, --token string        optional Rozhanitsy bearer token (env SCAN_TOKEN); the API is public
 ```
 ```

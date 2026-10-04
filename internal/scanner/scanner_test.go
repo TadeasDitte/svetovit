@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -120,6 +121,113 @@ func TestExtensionsAreSentWithoutVendor(t *testing.T) {
 	for _, c := range got {
 		if c.Product == "foo" && c.Vendor != "" {
 			t.Errorf("plugin sent with vendor %q", c.Vendor)
+		}
+	}
+}
+
+func wpSite(t *testing.T, dir string) {
+	t.Helper()
+	write(t, filepath.Join(dir, "wp-load.php"), "<?php")
+	write(t, filepath.Join(dir, "wp-includes/version.php"), "$wp_version = '6.5';")
+}
+
+func locations(t *testing.T, root string, depth int) map[string]bool {
+	t.Helper()
+	reg, err := detector.LoadFS(detectors.FS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := New(reg, depth).Scan(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locs := map[string]bool{}
+	for _, c := range got {
+		locs[c.LocalID] = true
+	}
+	return locs
+}
+
+func TestNestedSiteIsNotReportedButItsLockfileIs(t *testing.T) {
+	root := t.TempDir()
+	outer := filepath.Join(root, "outer")
+	wpSite(t, outer)
+	wpSite(t, filepath.Join(outer, "blog")) // an install inside an install is not a separate site
+	write(t, filepath.Join(outer, "blog/composer.lock"), `{"packages":[{"name":"a/b","version":"1.0.0"}]}`)
+
+	locs := locations(t, root, UnlimitedDepth)
+	if !locs[outer] || locs[filepath.Join(outer, "blog")] {
+		t.Errorf("want only the outer site, got %v", locs)
+	}
+	if !locs[filepath.Join(outer, "blog/composer.lock")] {
+		t.Errorf("lock file inside a site should still be found: %v", locs)
+	}
+}
+
+func TestDepthLimitsSitesAndLockfiles(t *testing.T) {
+	root := t.TempDir()
+	wpSite(t, filepath.Join(root, "a"))                                                                     // depth 1
+	wpSite(t, filepath.Join(root, "x/y/deep"))                                                              // depth 3
+	write(t, filepath.Join(root, "a/sub/composer.lock"), `{"packages":[{"name":"a/b","version":"1.0.0"}]}`) // depth 3
+
+	shallow := locations(t, root, 1)
+	if !shallow[filepath.Join(root, "a")] || shallow[filepath.Join(root, "x/y/deep")] || shallow[filepath.Join(root, "a/sub/composer.lock")] {
+		t.Errorf("depth 1: %v", shallow)
+	}
+	full := locations(t, root, UnlimitedDepth)
+	if !full[filepath.Join(root, "x/y/deep")] || !full[filepath.Join(root, "a/sub/composer.lock")] {
+		t.Errorf("unlimited depth: %v", full)
+	}
+}
+
+func TestUnreadableSubdirectoryDoesNotAbortScan(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read everything")
+	}
+	root := t.TempDir()
+	wpSite(t, filepath.Join(root, "ok"))
+	locked := filepath.Join(root, "locked")
+	if err := os.Mkdir(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(locked, 0o755) })
+
+	if locs := locations(t, root, UnlimitedDepth); !locs[filepath.Join(root, "ok")] {
+		t.Errorf("readable site lost: %v", locs)
+	}
+}
+
+func TestMissingTargetIsAnError(t *testing.T) {
+	reg, err := detector.LoadFS(detectors.FS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(reg, UnlimitedDepth).Scan(filepath.Join(t.TempDir(), "nope")); err == nil {
+		t.Error("want an error for a missing target")
+	}
+}
+
+func BenchmarkScanHostingTree(b *testing.B) {
+	reg, err := detector.LoadFS(detectors.FS)
+	if err != nil {
+		b.Fatal(err)
+	}
+	root := b.TempDir()
+	for i := 0; i < 2000; i++ {
+		site := filepath.Join(root, fmt.Sprintf("tenant%04d", i/20), fmt.Sprintf("site%d", i), "public_html")
+		for _, f := range []string{"wp-load.php", "wp-includes/version.php", "wp-content/plugins/p1/readme.txt", "wp-content/uploads/2026/01/x.jpg", "wp-content/themes/t/style.css"} {
+			p := filepath.Join(site, f)
+			os.MkdirAll(filepath.Dir(p), 0o755)
+			os.WriteFile(p, []byte("$wp_version = '6.5'; Stable tag: 1.0 Version: 1.0"), 0o644)
+		}
+		for j := 0; j < 5; j++ { // noise: dirs that are not installs
+			os.MkdirAll(filepath.Join(root, fmt.Sprintf("tenant%04d", i/20), fmt.Sprintf("logs%d_%d", i, j)), 0o755)
+		}
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := New(reg, UnlimitedDepth).Scan(root); err != nil {
+			b.Fatal(err)
 		}
 	}
 }
