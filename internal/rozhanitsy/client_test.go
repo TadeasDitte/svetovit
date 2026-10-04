@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestCheckVulnsBatchesRetriesAndMapsLocations(t *testing.T) {
@@ -186,5 +187,48 @@ func TestCheckVulnsResolvesAmbiguousCandidates(t *testing.T) {
 	}
 	if len(resp.Unmatched) != 1 || resp.Unmatched[0].Product != "orc" {
 		t.Errorf("only the non-resolvable component should stay unmatched: %+v", resp.Unmatched)
+	}
+}
+
+func TestRetriesServerErrorsButNotClientErrors(t *testing.T) {
+	var calls atomic.Int32
+	status := http.StatusInternalServerError
+	failures := int32(2)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) <= failures {
+			w.WriteHeader(status)
+			return
+		}
+		json.NewEncoder(w).Encode(batchResponse{Data: []checkResult{{}}})
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "")
+	client.RetryBackoff = time.Millisecond
+	comps := []Component{{Product: "x", Version: "1"}}
+
+	if _, err := client.CheckVulns(context.Background(), comps, 0, nil, false); err != nil {
+		t.Fatalf("two 500s then success should succeed: %v", err)
+	}
+	if calls.Load() != 3 {
+		t.Errorf("want 3 calls, got %d", calls.Load())
+	}
+
+	calls.Store(0)
+	failures = 1000
+	if _, err := client.CheckVulns(context.Background(), comps, 0, nil, false); err == nil {
+		t.Error("persistent 500 should fail")
+	}
+	if calls.Load() != maxRetries+1 {
+		t.Errorf("want %d calls for a persistent 500, got %d", maxRetries+1, calls.Load())
+	}
+
+	calls.Store(0)
+	status = http.StatusUnprocessableEntity
+	if _, err := client.CheckVulns(context.Background(), comps, 0, nil, false); err == nil {
+		t.Error("422 should fail")
+	}
+	if calls.Load() != 1 {
+		t.Errorf("422 must not be retried, got %d calls", calls.Load())
 	}
 }
