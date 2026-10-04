@@ -25,6 +25,16 @@ jobs:
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created == 'true' }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
+          - { goos: windows, goarch: amd64, ext: .exe }
+          - { goos: windows, goarch: arm64, ext: .exe }
     steps:
       - uses: actions/checkout@v4
 
@@ -32,14 +42,14 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Build binaries
+      - name: Build binary
         env:
           CGO_ENABLED: 0
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
         run: |
-          for arch in amd64 arm64; do
-            GOOS=linux GOARCH=$arch go build -trimpath -ldflags "-s -w" \
-              -o dist/svetovit-linux-$arch ./cmd/svetovit
-          done
+          go build -trimpath -ldflags "-s -w" \
+            -o dist/svetovit-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }} ./cmd/svetovit
 
       - name: Upload to release
         env:
