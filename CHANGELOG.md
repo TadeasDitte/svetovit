@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.2.0](https://github.com/TadeasDitte/svetovit/compare/v1.1.0...v1.2.0) (2026-10-04)
+
+
+### Features
+
+* enhance component structure with platform and ambiguous resolution support ([d6d3acc](https://github.com/TadeasDitte/svetovit/commit/d6d3acc0a7205a4cbff92a596741b550f8a9415c))
+
+
+### Bug Fixes
+
+* update regex for plugin version extraction in WordPress detector ([365d927](https://github.com/TadeasDitte/svetovit/commit/365d927864806dfc1381b69acc2bb8f56633690e))
+
 ## [1.1.0](https://github.com/TadeasDitte/svetovit/compare/v1.0.0...v1.1.0) (2026-10-04)
 
 
