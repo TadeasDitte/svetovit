@@ -57,12 +57,18 @@ type apiVulnerability struct {
 	CVSSScore  float64 `json:"cvss_score"`
 	Severity   string  `json:"severity"`
 	Confidence string  `json:"confidence"`
+	FixedIn    string  `json:"fixed_in"`
+
+	AffectedRange struct {
+		Vendor string `json:"vendor"`
+	} `json:"affected_range"`
 }
 
 type checkResult struct {
 	Vendor          string             `json:"vendor"`
 	Product         string             `json:"product"`
 	Version         string             `json:"version"`
+	Ambiguous       bool               `json:"ambiguous"`
 	Vulnerabilities []apiVulnerability `json:"vulnerabilities"`
 }
 
@@ -78,6 +84,7 @@ type Vulnerability struct {
 	CVEID            string  `json:"cve_id"`
 	CVSSScore        float64 `json:"cvss_score"`
 	CVSSSeverity     string  `json:"cvss_severity"`
+	FixedIn          string  `json:"fixed_in,omitempty"`
 }
 
 // UnmatchedComponent is a component whose only matches are low-confidence: the source named the
@@ -87,6 +94,10 @@ type UnmatchedComponent struct {
 	Product          string `json:"product"`
 	InstalledVersion string `json:"installed_version"`
 	LocalID          string `json:"local_id,omitempty"`
+
+	// Ambiguous marks a product name shared by several vendors or ecosystems; the API refuses to
+	// guess and returns nothing until the request names a vendor or ecosystem.
+	Ambiguous bool `json:"ambiguous,omitempty"`
 }
 
 type LocationReport struct {
@@ -191,7 +202,7 @@ func (c *Client) CheckVulns(ctx context.Context, components []Component, minScor
 			locs := locations[key]
 			localID := strings.Join(locs, ",")
 
-			hasHigh, hasLow := false, false
+			hasHigh, hasLow := false, results[i].Ambiguous
 			for _, v := range results[i].Vulnerabilities {
 				if comp.NVDOnly && v.Source != "nvd" {
 					continue
@@ -204,14 +215,19 @@ func (c *Client) CheckVulns(ctx context.Context, components []Component, minScor
 				if v.CVSSScore < minScore || (len(allowed) > 0 && !allowed[strings.ToUpper(v.Severity)]) {
 					continue
 				}
+				vendor := comp.Vendor
+				if vendor == "" {
+					vendor = v.AffectedRange.Vendor
+				}
 				vuln := Vulnerability{
-					Vendor:           comp.Vendor,
+					Vendor:           vendor,
 					Product:          comp.Product,
 					LocalID:          localID,
 					InstalledVersion: comp.Version,
 					CVEID:            v.ID,
 					CVSSScore:        v.CVSSScore,
 					CVSSSeverity:     strings.ToUpper(v.Severity),
+					FixedIn:          v.FixedIn,
 				}
 				merged.Vulnerable = append(merged.Vulnerable, vuln)
 				for _, loc := range locs {
@@ -221,7 +237,7 @@ func (c *Client) CheckVulns(ctx context.Context, components []Component, minScor
 			}
 
 			if hasLow && !hasHigh {
-				unm := UnmatchedComponent{Vendor: comp.Vendor, Product: comp.Product, InstalledVersion: comp.Version, LocalID: localID}
+				unm := UnmatchedComponent{Vendor: comp.Vendor, Product: comp.Product, InstalledVersion: comp.Version, LocalID: localID, Ambiguous: results[i].Ambiguous}
 				merged.Unmatched = append(merged.Unmatched, unm)
 				for _, loc := range locs {
 					entry := merged.locationEntry(loc)
