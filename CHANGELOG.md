@@ -1,5 +1,35 @@
 # Changelog
 
+## [1.4.0](https://github.com/TadeasDitte/svetovit/compare/v1.3.0...v1.4.0) (2026-10-04)
+
+
+### Features
+
+* add output sorted by location, option to output stdout as json or only errors in stderr ([1dc87fa](https://github.com/TadeasDitte/svetovit/commit/1dc87fae28c88fe8fee5a3bab6fa42459d38813e))
+* added [#1](https://github.com/TadeasDitte/svetovit/issues/1) ([790e1ef](https://github.com/TadeasDitte/svetovit/commit/790e1ef5031a84b257d3d6b65c1e98f508bfc0f3))
+* added auto releases ([6d994e5](https://github.com/TadeasDitte/svetovit/commit/6d994e50d61844cfb4f36bb0f23257c51dbdd07c))
+* added flags ([a91bb96](https://github.com/TadeasDitte/svetovit/commit/a91bb96d1b7082cdafca763bc20b83e20a64fd07))
+* added readme ([121e9e7](https://github.com/TadeasDitte/svetovit/commit/121e9e738c7f4b7e445b77b67ea9efcab2dce928))
+* changed flags ([8af9575](https://github.com/TadeasDitte/svetovit/commit/8af9575998d72dc84762fe543ec71a9d6359074c))
+* drafted configs for joomla, wp and drupal ([febedca](https://github.com/TadeasDitte/svetovit/commit/febedca858ca99d3a128e9c89ff038f2f939aae2))
+* drafted structure ([622d301](https://github.com/TadeasDitte/svetovit/commit/622d301228b89f1d56699f8dd63d6c8c1c00b2d7))
+* enhance component structure with platform and ambiguous resolution support ([b9b34d2](https://github.com/TadeasDitte/svetovit/commit/b9b34d227e9d43ada1287390aae18b1a7f575433))
+* enhance retry logic to handle 5xx and network errors; add tests for server error retries ([a6ea83c](https://github.com/TadeasDitte/svetovit/commit/a6ea83cfbc94ac7fc9e6b5cab96d3e7b22773a10))
+* fixed some ai slop uwu ([53edaf5](https://github.com/TadeasDitte/svetovit/commit/53edaf5e594d6cfc2fc68885ae22d314cfde48db))
+* flags work normally now ([8bdbe54](https://github.com/TadeasDitte/svetovit/commit/8bdbe546dcd3bd9335a07892a92b89c65508ef3a))
+* implemented array thingi ([cd6aec3](https://github.com/TadeasDitte/svetovit/commit/cd6aec34edad026c50afbee8590a5fd27868b23c))
+* init go project ([a8b1e22](https://github.com/TadeasDitte/svetovit/commit/a8b1e2271b0ecb71212e27b5685a592a42b0acd5))
+* laravel detector ([2043a78](https://github.com/TadeasDitte/svetovit/commit/2043a78cf88ff04fa5eb4c281007b9f4460415d9))
+* now can read .env ([85bf901](https://github.com/TadeasDitte/svetovit/commit/85bf901efd007e00d4b870fbe1301818ba0372b2))
+* prestashop ([0e83426](https://github.com/TadeasDitte/svetovit/commit/0e8342646a5343a2171d5244b9e1233902e2849e))
+* random AI slop i made for prototype version, now fix it shad0woot UwU ([d3fffe4](https://github.com/TadeasDitte/svetovit/commit/d3fffe497f6c88fd390b850c7bc1412a40e4b838))
+* refactor code to pass sonarqube quality check :3 ([d8b2e43](https://github.com/TadeasDitte/svetovit/commit/d8b2e437c7d8e70d0ba0538d84194e6eac6fd3f2))
+
+
+### Bug Fixes
+
+* update regex for plugin version extraction in WordPress detector ([474de1f](https://github.com/TadeasDitte/svetovit/commit/474de1f4004af328476f28a4ade648ad65870505))
+
 ## [1.3.0](https://github.com/TadeasDitte/svetovit/compare/v1.2.0...v1.3.0) (2026-10-04)
 
 
