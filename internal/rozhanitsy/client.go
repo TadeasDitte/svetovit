@@ -42,11 +42,9 @@ type Component struct {
 	// name like "gallery" would match every unrelated vendor that ships one.
 	Platform string `json:"-"`
 
-	requirePlatform bool // set on candidate re-checks, which carry a vendor of their own
+	requirePlatform bool
 }
 
-// requestKey identifies a component to send; identical components found at several locations are
-// sent once and mapped back to every location.
 func requestKey(comp Component) string {
 	return strings.Join([]string{comp.Vendor, comp.Product, comp.Version, comp.Ecosystem}, keySep)
 }
@@ -106,16 +104,12 @@ type Vulnerability struct {
 	FixedIn          string  `json:"fixed_in,omitempty"`
 }
 
-// UnmatchedComponent is a component whose only matches are low-confidence: the source named the
-// product but gave no version bounds.
 type UnmatchedComponent struct {
 	Vendor           string `json:"vendor"`
 	Product          string `json:"product"`
 	InstalledVersion string `json:"installed_version"`
 	LocalID          string `json:"local_id,omitempty"`
 
-	// Ambiguous marks a product name shared by several vendors or ecosystems; the API refuses to
-	// guess and returns nothing until the request names a vendor or ecosystem.
 	Ambiguous bool `json:"ambiguous,omitempty"`
 }
 
@@ -158,12 +152,9 @@ func (e *APIError) Error() string {
 
 type Client struct {
 	BaseURL string
-	// Token is optional: the API is public, but a bearer token is sent when one is set.
 	Token string
 	HTTP  *http.Client
 
-	// RetryBackoff is the first wait before retrying a 5xx or network error; it doubles per attempt.
-	// Zero means one second.
 	RetryBackoff time.Duration
 }
 
@@ -175,9 +166,6 @@ func New(baseURL, token string) *Client {
 	}
 }
 
-// CheckVulns checks components against the vulnerability database. includeLow also returns
-// low-confidence matches, which are reported as Unmatched. minScore and severities filter results
-// client-side.
 func (c *Client) CheckVulns(ctx context.Context, components []Component, minScore float64, severities []string, includeLow bool) (*CheckResponse, error) {
 	merged := &CheckResponse{CheckedAt: time.Now(), ByLocation: make(map[string]*LocationReport)}
 	if len(components) == 0 {
@@ -189,7 +177,6 @@ func (c *Client) CheckVulns(ctx context.Context, components []Component, minScor
 		allowed[strings.ToUpper(strings.TrimSpace(s))] = true
 	}
 
-	// Dedupe, keeping first-seen order so batches are deterministic.
 	var keys []string
 	unique := make(map[string]Component)
 	locations := make(map[string][]string)
@@ -294,8 +281,6 @@ func (c *Client) CheckVulns(ctx context.Context, components []Component, minScor
 
 	return merged, nil
 }
-
-// checkBatch posts one batch.
 func (c *Client) checkBatch(ctx context.Context, packages []batchPackage, includeLow bool) ([]checkResult, error) {
 	reqBody, err := json.Marshal(batchRequest{Packages: packages, IncludeLowConfidence: includeLow})
 	if err != nil {
@@ -308,8 +293,6 @@ func (c *Client) checkBatch(ctx context.Context, packages []batchPackage, includ
 	return result.Data, nil
 }
 
-// do sends one API request and decodes the JSON reply into out, retrying while the server
-// rate-limits (429), fails (5xx) or cannot be reached.
 func (c *Client) do(ctx context.Context, method, path string, body []byte, out any) error {
 	for attempt := 0; ; attempt++ {
 		retryAfter, err := c.doOnce(ctx, method, path, body, out)
@@ -377,7 +360,6 @@ func (c *Client) doOnce(ctx context.Context, method, path string, body []byte, o
 	return 0, nil
 }
 
-// transportError is a failure to get any HTTP response (connection reset, timeout); worth retrying.
 type transportError struct{ err error }
 
 func (e *transportError) Error() string { return e.err.Error() }
@@ -391,7 +373,6 @@ func (c *Client) backoff(attempt int) time.Duration {
 	return base << attempt
 }
 
-// retryDelay honors Retry-After (seconds) and otherwise waits a second, the rate limit being per minute.
 func retryDelay(resp *http.Response) time.Duration {
 	if secs, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && secs > 0 {
 		return time.Duration(secs) * time.Second

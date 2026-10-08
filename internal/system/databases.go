@@ -8,8 +8,6 @@ import (
 	"strings"
 )
 
-// parseDpkgStatus reads the dpkg status database. Packages are reported under
-// their source package name since that is what Debian/Ubuntu advisories track.
 func parseDpkgStatus(path string) ([]Package, error) {
 	var packages []Package
 	err := readStanzas(path, ": ", func(fields map[string]string) {
@@ -18,7 +16,6 @@ func parseDpkgStatus(path string) ([]Package, error) {
 		}
 		name, version := fields["Package"], fields["Version"]
 		if source := fields["Source"]; source != "" {
-			// "Source: openssl" or "Source: openssl (3.0.11-1)" when it differs from the binary version.
 			sourceName, sourceVersion, hasVersion := strings.Cut(source, " (")
 			name = sourceName
 			if hasVersion {
@@ -30,7 +27,6 @@ func parseDpkgStatus(path string) ([]Package, error) {
 	return dedupe(packages), err
 }
 
-// parseAPKInstalled reads Alpine's installed database, reporting packages under their origin (source) name.
 func parseAPKInstalled(path string) ([]Package, error) {
 	var packages []Package
 	err := readStanzas(path, ":", func(fields map[string]string) {
@@ -46,7 +42,6 @@ func parseAPKInstalled(path string) ([]Package, error) {
 	return dedupe(packages), err
 }
 
-// parsePacmanLocal reads the desc file of every package in pacman's local database.
 func parsePacmanLocal(dir string) ([]Package, error) {
 	descs, err := filepath.Glob(filepath.Join(dir, "*", "desc"))
 	if err != nil {
@@ -80,8 +75,6 @@ func parsePacmanLocal(dir string) ([]Package, error) {
 	return packages, nil
 }
 
-// readStanzas calls fn for every blank-line separated block of "Key<sep>Value" lines.
-// Indented continuation lines are ignored.
 func readStanzas(path, sep string, fn func(map[string]string)) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -128,13 +121,8 @@ func dedupe(packages []Package) []Package {
 	return out
 }
 
-// nixStorePath matches a store path's "<hash>-<name>-<version>" tail. The version is the first
-// dash-separated segment starting with a digit; trailing output names (-bin, -dev, ...) and
-// nixpkgs revision suffixes are dropped.
 var nixStorePath = regexp.MustCompile(`^/nix/store/[0-9a-z]{32}-(.+?)-([0-9][0-9A-Za-z.+_]*)(?:-.*)?$`)
 
-// parseNixClosure turns store paths (one per line) into packages. Derivations, sources, generated
-// config and anything without a version are skipped.
 func parseNixClosure(out string) []Package {
 	var packages []Package
 	for _, line := range strings.Split(out, "\n") {

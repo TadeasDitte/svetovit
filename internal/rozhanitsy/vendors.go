@@ -1,6 +1,5 @@
 package rozhanitsy
 
-// Remove drops every result for products where match returns true.
 func (r *CheckResponse) Remove(match func(product string) bool) {
 	keepV := r.Vulnerable[:0]
 	for _, v := range r.Vulnerable {
@@ -37,7 +36,6 @@ func (r *CheckResponse) Remove(match func(product string) bool) {
 	}
 }
 
-// Merge adds the results of other to r.
 func (r *CheckResponse) Merge(other *CheckResponse) {
 	r.Vulnerable = append(r.Vulnerable, other.Vulnerable...)
 	r.Unmatched = append(r.Unmatched, other.Unmatched...)

@@ -10,15 +10,11 @@ import (
 	"strings"
 )
 
-// CPE is the NVD vendor/product nixpkgs records for a package in meta.identifiers.
 type CPE struct {
 	Vendor  string `json:"vendor"`
 	Product string `json:"product"`
 }
 
-// nixCPEExpr looks each name up in the registry's nixpkgs and returns {name: {vendor, product}} for
-// those whose meta.identifiers.cpeParts carries a vendor. Names that are no attribute, throw when
-// evaluated (aliases) or have no CPE are left out. Names arrive through SVETOVIT_NAMES.
 const nixCPEExpr = `
 let
   pkgs = (builtins.getFlake "nixpkgs").legacyPackages.${builtins.currentSystem};
@@ -32,8 +28,6 @@ let
 in builtins.listToAttrs (builtins.concatMap lookup names)
 `
 
-// NixCPEs resolves nixpkgs CPE vendor/product pairs for the given package names. Packages without
-// CPE metadata, which is most of nixpkgs, are simply absent from the result.
 func NixCPEs(names []string) (map[string]CPE, error) {
 	if len(names) == 0 {
 		return nil, nil
@@ -61,7 +55,6 @@ func NixCPEs(names []string) (map[string]CPE, error) {
 	return cpes, nil
 }
 
-// stderrOf appends a failed command's stderr, which holds nix's actual error message.
 func stderrOf(err error) string {
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {

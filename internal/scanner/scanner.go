@@ -21,11 +21,9 @@ type Component struct {
 	Ecosystem string
 	LocalID   string
 
-	// Platform is the CMS an extension belongs to; empty for the CMS itself and for lock file packages.
 	Platform string
 }
 
-// skipDirs are never searched: they hold dependencies' own lock files and projects, not the site's.
 var skipDirs = map[string]bool{
 	"vendor":       true,
 	"node_modules": true,
@@ -37,7 +35,6 @@ const UnlimitedDepth = -1
 type Scanner struct {
 	registry *detector.Registry
 	maxDepth int
-	// Workers bounds concurrent filesystem work; zero picks a default from the CPU count.
 	Workers int
 }
 
@@ -52,7 +49,6 @@ func (s *Scanner) workers() int {
 	return min(32, runtime.NumCPU()*4)
 }
 
-// found is what one walk of the tree turns up.
 type found struct {
 	mu        sync.Mutex
 	sites     []string
@@ -70,7 +66,6 @@ func (s *Scanner) Scan(root string) ([]Component, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Directories are read concurrently, so fix the order for stable reports.
 	sort.Strings(result.sites)
 	sort.Strings(result.lockfiles)
 
@@ -84,12 +79,10 @@ func (s *Scanner) Scan(root string) ([]Component, error) {
 		path := result.lockfiles[i]
 		packages, err := lockfile.Parse(path)
 		if err != nil {
-			// One malformed lock file should not abort a scan of thousands of sites.
 			fmt.Fprintf(os.Stderr, "warning: skipping %s: %v\n", path, err)
 			return
 		}
 		for _, p := range packages {
-			// Ecosystem packages are matched by name alone; the API wants no vendor for them.
 			lockComponents[i] = append(lockComponents[i], Component{
 				Product:   p.Name,
 				Version:   p.Version,
@@ -109,7 +102,6 @@ func (s *Scanner) Scan(root string) ([]Component, error) {
 	return components, nil
 }
 
-// parallel runs fn(0..n-1) on a bounded pool and waits for all of them.
 func (s *Scanner) parallel(n int, fn func(i int)) {
 	jobs := make(chan int)
 	var wg sync.WaitGroup
@@ -129,10 +121,6 @@ func (s *Scanner) parallel(n int, fn func(i int)) {
 	wg.Wait()
 }
 
-// walk visits every directory once, collecting CMS installs and lock files together. A directory that
-// is an install is not searched for further installs (its plugins would look like nested ones), but is
-// still searched for lock files. Directories are read concurrently; the semaphore is only held while
-// reading, never while waiting for children, so the walk cannot deadlock.
 func (s *Scanner) walk(root string) (*found, error) {
 	res := &found{}
 	sem := make(chan struct{}, s.workers())
@@ -191,8 +179,6 @@ func (s *Scanner) walk(root string) (*found, error) {
 	return res, res.err
 }
 
-// readFailed handles a directory that could not be listed. The scan target itself must be readable;
-// below it, unreadable or vanished directories are routine on shared hosting and only warned about.
 func (s *Scanner) readFailed(res *found, dir, root string, err error) {
 	if dir != root && (errors.Is(err, fs.ErrPermission) || errors.Is(err, fs.ErrNotExist)) {
 		fmt.Fprintf(os.Stderr, "warning: skipping unreadable directory %s\n", dir)

@@ -1,4 +1,3 @@
-// Package system detects the host operating system and lists the packages installed by its package manager.
 package system
 
 import (
@@ -13,10 +12,8 @@ import (
 	"time"
 )
 
-// packageQueryTimeout bounds external package-manager queries.
 const packageQueryTimeout = 2 * time.Minute
 
-// ErrUnsupported is returned by Detect when the host has no package manager Svetovit knows how to read.
 var ErrUnsupported = errors.New("unsupported operating system")
 
 type Manager string
@@ -30,7 +27,6 @@ const (
 	Nix    Manager = "nix"
 )
 
-// Environment describes the host OS. Ecosystem follows the OSV ecosystem naming (e.g. "Debian:12").
 type Environment struct {
 	ID        string
 	VersionID string
@@ -44,7 +40,6 @@ type Package struct {
 	Version string
 }
 
-// Detect identifies the host OS and its package manager.
 func Detect() (*Environment, error) {
 	if runtime.GOOS == "freebsd" {
 		return &Environment{ID: "freebsd", Name: "FreeBSD", Ecosystem: "FreeBSD", Manager: BSDPkg}, nil
@@ -122,7 +117,6 @@ func managerFor(families []string) Manager {
 	return ""
 }
 
-// ecosystemFor maps os-release ID/VERSION_ID to the OSV ecosystem name, falling back to "ID:VERSION_ID".
 func ecosystemFor(id, versionID string) string {
 	major, _, _ := strings.Cut(versionID, ".")
 	switch id {
@@ -147,7 +141,6 @@ func ecosystemFor(id, versionID string) string {
 	case "arch":
 		return "Arch Linux"
 	case "nixos":
-		// OSV has no nixpkgs ecosystem; packages are matched by name alone.
 		return ""
 	}
 	if versionID == "" {
@@ -163,7 +156,6 @@ const (
 	nixSystem     = "/run/current-system"
 )
 
-// Source names where the package list is read from, used as the report location.
 func (e *Environment) Source() string {
 	switch e.Manager {
 	case Dpkg:
@@ -178,7 +170,6 @@ func (e *Environment) Source() string {
 	return string(e.Manager)
 }
 
-// Packages lists the packages installed on the host.
 func (e *Environment) Packages() ([]Package, error) {
 	switch e.Manager {
 	case Dpkg:
@@ -212,15 +203,12 @@ func queryTabSeparated(name string, args ...string) ([]Package, error) {
 		if !ok || pkgName == "" || version == "" {
 			continue
 		}
-		// rpm reports a zero epoch for packages that have none; OSV omits it.
 		version = strings.TrimPrefix(version, "0:")
 		packages = append(packages, Package{Name: pkgName, Version: version})
 	}
 	return packages, nil
 }
 
-// nixPackages lists the running system's closure: everything the current generation depends on,
-// including packages only pulled in as dependencies.
 func nixPackages() ([]Package, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), packageQueryTimeout)
 	defer cancel()

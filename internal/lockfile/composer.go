@@ -16,8 +16,6 @@ type composerPackage struct {
 	Version string `json:"version"`
 }
 
-// parseComposer reads a composer.lock. Dev packages are included since the lock
-// file can't tell whether they were installed with --no-dev.
 func parseComposer(path string) ([]Package, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

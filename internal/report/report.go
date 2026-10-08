@@ -52,7 +52,6 @@ func (f Filter) Apply(vulns []rozhanitsy.Vulnerability) []rozhanitsy.Vulnerabili
 	return out
 }
 
-// System is the result of checking the host's OS packages, reported in its own block.
 type System struct {
 	Name      string
 	Ecosystem string
@@ -256,7 +255,6 @@ func suffix(n int) string {
 	return "s"
 }
 
-// productName shows the vendor when it is known, so same-named products from different vendors differ.
 func productName(v rozhanitsy.Vulnerability) string {
 	if v.Vendor == "" || v.Vendor == v.Product {
 		return v.Product
