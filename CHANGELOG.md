@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.5.0](https://github.com/TadeasDitte/svetovit/compare/v1.4.0...v1.5.0) (2026-10-08)
+
+
+### Features
+
+* added aggressivity flag, added scan modes and optimised iops ([add9036](https://github.com/TadeasDitte/svetovit/commit/add9036279363ec12e51bd92bd91fb0c53d1583f))
+* added workers flag, added skip flag, implemented skip to optimise iops for detectors ([9859d44](https://github.com/TadeasDitte/svetovit/commit/9859d447584ae2a17b4a96f0345b6fac903856a4))
+
 ## [1.4.0](https://github.com/TadeasDitte/svetovit/compare/v1.3.0...v1.4.0) (2026-10-04)
 
 
