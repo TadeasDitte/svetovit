@@ -46,6 +46,7 @@ working directory.
 ## Options
 
 ```
+      --cross-filesystems   descend into directories mounted from other filesystems (NFS, backup mounts, ...) below --target
   -c, --confidence string   which results to report: bounded (known-vulnerable), unbound (unmatched), or all (default "all")
   -d, --depth int           max directory levels below --target to search for CMS installs (0 = target only,
                             1 = target's immediate subdirectories, ...); default is a full recursive search (default -1)
@@ -60,7 +61,7 @@ working directory.
       --skip-system         don't check the host's OS packages (dpkg, rpm, apk, pacman, nix, FreeBSD pkg)
   -t, --target string       path to the directory to scan (default ".")
       --timeout duration    HTTP request timeout (default 30s)
-      --workers int         max concurrent filesystem operations while scanning (0 = automatic)
+      --workers int         max concurrent filesystem operations while scanning; raise it on fast local SSDs (default 4)
   -T, --token string        optional Rozhanitsy bearer token (env SCAN_TOKEN); the API is public
 ```
 
@@ -69,7 +70,10 @@ working directory.
 - `--target` can be a single install or a directory holding many (for example a hosting server's tenant directories).
   Svetovit walks it up to `--depth` levels and reports each install separately; use `--per-location` to see the
   results grouped by install.
-- `vendor/`, `node_modules/` and `.git/` are never searched.
+- `vendor/`, `node_modules/` and `.git/` are never searched. Neither are an install's upload and cache directories
+  (for example `wp-content/uploads`, Drupal `sites/*/files`, Laravel `storage`), listed under `skip:` in each
+  [detector](detectors/).
+- The walk stays on the filesystem `--target` is on, like `find -xdev`; pass `--cross-filesystems` to follow mounts.
 - Host OS packages are checked in a separate request and reported in their own "System packages" block (the `system`
   key in JSON output). Use `--skip-system` to leave them out.
 - Results fall into two groups, selectable with `--confidence`:
@@ -77,6 +81,16 @@ working directory.
   - **unbound** (listed as "unmatched"): Svetovit could not confirm whether the component is affected, either because
     an advisory names the product but gives no affected versions, or because the product name is shared by several
     vendors and the API refuses to guess.
+
+## Running across a fleet
+
+The walk is mostly directory listings, and on a cold cache each one is a random disk read. When running Svetovit
+from Ansible or cron on many hosts:
+
+- point `--target` at the web root (e.g. `/var/www`), not `/`
+- run it at idle I/O priority: `ionice -c3 nice -n19 svetovit ...`
+- keep `--workers` at its default (4) on HDDs and network or shared storage
+- if hosts share a datastore or SAN, limit how many scan at once (Ansible `serial:` or a low `forks`)
 
 ## Exit codes
 

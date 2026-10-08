@@ -6,7 +6,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"sync"
 
@@ -32,10 +31,13 @@ var skipDirs = map[string]bool{
 
 const UnlimitedDepth = -1
 
+const DefaultWorkers = 4
+
 type Scanner struct {
 	registry *detector.Registry
 	maxDepth int
-	Workers int
+	Workers  int
+	CrossFilesystems bool
 }
 
 func New(registry *detector.Registry, maxDepth int) *Scanner {
@@ -46,7 +48,25 @@ func (s *Scanner) workers() int {
 	if s.Workers > 0 {
 		return s.Workers
 	}
-	return min(32, runtime.NumCPU()*4)
+	return DefaultWorkers
+}
+
+type site struct {
+	root      string
+	detectors []*detector.Detector
+}
+
+func (st *site) skips(dir string) bool {
+	rel, err := filepath.Rel(st.root, dir)
+	if err != nil {
+		return false
+	}
+	for _, d := range st.detectors {
+		if d.Skips(rel) {
+			return true
+		}
+	}
+	return false
 }
 
 type found struct {
@@ -126,13 +146,28 @@ func (s *Scanner) walk(root string) (*found, error) {
 	sem := make(chan struct{}, s.workers())
 	var wg sync.WaitGroup
 
-	var visit func(dir string, remaining int, inSite bool)
-	visit = func(dir string, remaining int, inSite bool) {
+	rootDev, checkDev := uint64(0), false
+	if !s.CrossFilesystems {
+		if info, err := os.Stat(root); err == nil {
+			rootDev, checkDev = deviceOf(info)
+		}
+	}
+
+	var visit func(dir string, remaining int, in *site)
+	visit = func(dir string, remaining int, in *site) {
 		defer wg.Done()
 
 		sem <- struct{}{}
+		if checkDev && dir != root {
+			if info, err := os.Lstat(dir); err == nil {
+				if dev, ok := deviceOf(info); ok && dev != rootDev {
+					<-sem
+					return
+				}
+			}
+		}
 		entries, err := os.ReadDir(dir)
-		var isSite bool
+		var found *site
 		var lockfiles []string
 		if err == nil {
 			names := make(map[string]struct{}, len(entries))
@@ -142,8 +177,8 @@ func (s *Scanner) walk(root string) (*found, error) {
 					lockfiles = append(lockfiles, filepath.Join(dir, e.Name()))
 				}
 			}
-			if !inSite {
-				isSite = s.detectedBy(dir, func(name string) bool { _, ok := names[name]; return ok })
+			if in == nil {
+				found = s.detectedBy(dir, func(name string) bool { _, ok := names[name]; return ok })
 			}
 		}
 		<-sem
@@ -155,8 +190,9 @@ func (s *Scanner) walk(root string) (*found, error) {
 
 		res.mu.Lock()
 		res.lockfiles = append(res.lockfiles, lockfiles...)
-		if isSite {
+		if found != nil {
 			res.sites = append(res.sites, dir)
+			in = found
 		}
 		res.mu.Unlock()
 
@@ -167,13 +203,17 @@ func (s *Scanner) walk(root string) (*found, error) {
 			if !e.IsDir() || skipDirs[e.Name()] {
 				continue
 			}
+			child := filepath.Join(dir, e.Name())
+			if in != nil && in.skips(child) {
+				continue
+			}
 			wg.Add(1)
-			go visit(filepath.Join(dir, e.Name()), decrementDepth(remaining), inSite || isSite)
+			go visit(child, decrementDepth(remaining), in)
 		}
 	}
 
 	wg.Add(1)
-	go visit(root, s.maxDepth, false)
+	go visit(root, s.maxDepth, nil)
 	wg.Wait()
 
 	return res, res.err
@@ -198,13 +238,17 @@ func decrementDepth(depth int) int {
 	return depth - 1
 }
 
-func (s *Scanner) detectedBy(path string, has func(string) bool) bool {
+func (s *Scanner) detectedBy(path string, has func(string) bool) *site {
+	var found *site
 	for _, d := range s.registry.All() {
 		if d.DetectIn(path, has) {
-			return true
+			if found == nil {
+				found = &site{root: path}
+			}
+			found.detectors = append(found.detectors, d)
 		}
 	}
-	return false
+	return found
 }
 
 func (s *Scanner) scanSite(site string) []Component {

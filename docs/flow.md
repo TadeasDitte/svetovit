@@ -5,7 +5,7 @@ End to end, from a directory on disk to a report. The API side is described in t
 
 ```mermaid
 flowchart TD
-    A[svetovit --target DIR] --> B[scanner.walk<br/>find CMS installs + lock files<br/>skips vendor/, node_modules/, .git/]
+    A[svetovit --target DIR] --> B[scanner.walk<br/>find CMS installs + lock files<br/>skips vendor/, node_modules/, .git/,<br/>install upload/cache dirs, other filesystems]
     B --> C{CMS marker found?}
     C -->|yes| D[detector: core version<br/>Component vendor=cms, product=cms]
     D --> E[detector: extensions<br/>Component product=dir name, no vendor<br/>Platform=cms]

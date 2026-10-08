@@ -231,3 +231,21 @@ func BenchmarkScanHostingTree(b *testing.B) {
 		}
 	}
 }
+
+func TestInstallUploadDirsAreNotSearched(t *testing.T) {
+	root := t.TempDir()
+	site := filepath.Join(root, "site")
+	wpSite(t, site)
+	lock := `{"packages":[{"name":"a/b","version":"1.0.0"}]}`
+	write(t, filepath.Join(site, "wp-content/uploads/x/composer.lock"), lock)
+	write(t, filepath.Join(site, "wp-content/themes/t/composer.lock"), lock)
+	write(t, filepath.Join(root, "other/wp-content/uploads/composer.lock"), lock)
+
+	locs := locations(t, root, UnlimitedDepth)
+	if locs[filepath.Join(site, "wp-content/uploads/x/composer.lock")] {
+		t.Errorf("lock file under wp-content/uploads should not be found: %v", locs)
+	}
+	if !locs[filepath.Join(site, "wp-content/themes/t/composer.lock")] || !locs[filepath.Join(root, "other/wp-content/uploads/composer.lock")] {
+		t.Errorf("lock files outside skipped dirs lost: %v", locs)
+	}
+}

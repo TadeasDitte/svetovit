@@ -9,11 +9,8 @@ import (
 	"strings"
 )
 
-// maxVersionRead caps how much of a file is searched for a version; versions live in file headers.
 const maxVersionRead = 64 << 10
 
-// VersionSpec is one place a version can be read from. File is relative to the install (or extension)
-// directory and may be a glob such as "*.php", matched against that directory's entries only.
 type VersionSpec struct {
 	File  string `yaml:"file"`
 	Regex string `yaml:"regex"`
@@ -21,8 +18,6 @@ type VersionSpec struct {
 	re *regexp.Regexp
 }
 
-// PluginSpec describes one kind of extension (plugins, themes, modules, ...). Version sources are tried
-// in order inside each directory matched by Glob.
 type PluginSpec struct {
 	Glob    string        `yaml:"glob"`
 	Version []VersionSpec `yaml:"version"`
@@ -33,6 +28,7 @@ type Detector struct {
 	Markers []string      `yaml:"markers"`
 	Version []VersionSpec `yaml:"version"`
 	Plugins []PluginSpec  `yaml:"plugins"`
+	Skip []string `yaml:"skip"`
 }
 
 type Plugin struct {
@@ -41,13 +37,19 @@ type Plugin struct {
 	Path    string
 }
 
-// compile validates the detector and precompiles its regexes.
 func (d *Detector) compile() error {
 	if len(d.Markers) == 0 {
 		return fmt.Errorf("%s: no markers defined", d.Name)
 	}
 	if err := compileSpecs(d.Name, "version", d.Version); err != nil {
 		return err
+	}
+	for i, pattern := range d.Skip {
+		pattern = filepath.FromSlash(pattern)
+		if _, err := filepath.Match(pattern, ""); err != nil {
+			return fmt.Errorf("%s: skip[%d]: invalid glob: %w", d.Name, i, err)
+		}
+		d.Skip[i] = pattern
 	}
 	for i, p := range d.Plugins {
 		if p.Glob == "" {
@@ -130,7 +132,6 @@ func (d *Detector) DetectPlugins(root string) ([]Plugin, error) {
 	return plugins, nil
 }
 
-// findVersion returns the first version found by specs inside dir.
 func findVersion(dir string, specs []VersionSpec) (string, bool) {
 	for _, spec := range specs {
 		for _, path := range expand(dir, spec.File) {
@@ -142,8 +143,6 @@ func findVersion(dir string, specs []VersionSpec) (string, bool) {
 	return "", false
 }
 
-// expand resolves a file pattern relative to dir. Literal names are returned as-is; patterns are matched
-// against dir's entries only, so glob characters in dir itself are harmless.
 func expand(dir, pattern string) []string {
 	if !strings.ContainsAny(pattern, "*?[") {
 		return []string{filepath.Join(dir, pattern)}
@@ -184,9 +183,15 @@ func extractVersion(path string, re *regexp.Regexp) (string, error) {
 	return string(match[1]), nil
 }
 
-// DetectIn is Detect for callers that already listed root: has reports whether a name exists directly
-// in it. A marker is only stat-ed when its first path segment is present, which skips the filesystem
-// for almost every directory of a large tree.
+func (d *Detector) Skips(rel string) bool {
+	for _, pattern := range d.Skip {
+		if ok, _ := filepath.Match(pattern, rel); ok {
+			return true
+		}
+	}
+	return false
+}
+
 func (d *Detector) DetectIn(root string, has func(name string) bool) bool {
 	for _, marker := range d.Markers {
 		first, _, _ := strings.Cut(filepath.ToSlash(marker), "/")

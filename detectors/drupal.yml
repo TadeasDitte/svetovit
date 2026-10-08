@@ -16,3 +16,5 @@ plugins:
     version: *info
   - glob: "themes/*/*"
     version: *info
+skip:
+  - sites/*/files

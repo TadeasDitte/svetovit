@@ -15,3 +15,7 @@ plugins:
     version:
       - file: "config/theme.yml"
         regex: '(?m)^version:\s*[''"]?([^''"\s]+)'
+skip:
+  - var/cache
+  - cache
+  - img

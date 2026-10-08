@@ -17,3 +17,6 @@ plugins:
     version:
       - file: "style.css"
         regex: '(?mi)^[ \t/*#@]*Version:[ \t]*([^\s*]+)'
+skip:
+  - wp-content/uploads
+  - wp-content/cache

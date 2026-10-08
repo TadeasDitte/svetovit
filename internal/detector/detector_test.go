@@ -64,6 +64,7 @@ func TestLoadFSErrors(t *testing.T) {
 		{"no capture group", "name: x\nmarkers: [a]\nversion:\n  - file: f\n    regex: 'abc'\n", "needs a capture group"},
 		{"plugin missing glob", "name: x\nmarkers: [a]\nplugins:\n  - version: [{file: f, regex: '(1)'}]\n", "missing glob"},
 		{"plugin bad glob", "name: x\nmarkers: [a]\nplugins:\n  - glob: '['\n    version: [{file: f, regex: '(1)'}]\n", "invalid glob"},
+		{"bad skip glob", "name: x\nmarkers: [a]\nskip: ['[']\n", "skip[0]: invalid glob"},
 		{"plugin no version", "name: x\nmarkers: [a]\nplugins:\n  - glob: 'p/*'\n", "no version sources"},
 		{"plugin bad regex", "name: x\nmarkers: [a]\nplugins:\n  - glob: 'p/*'\n    version: [{file: f, regex: '(['}]\n", "plugins[0].version[0]"},
 	}
@@ -215,5 +216,20 @@ func TestExtractVersionOnlyReadsFileHeader(t *testing.T) {
 	write(t, filepath.Join(root, "f"), strings.Repeat(" ", maxVersionRead-10)+"v=7")
 	if got, err := d.CoreVersion(root); err != nil || got != "7" {
 		t.Fatalf("got %q, %v", got, err)
+	}
+}
+
+func TestSkips(t *testing.T) {
+	d := load(t, "name: x\nmarkers: [a]\nskip:\n  - uploads\n  - sites/*/files\n")
+	for rel, want := range map[string]bool{
+		"uploads": true,
+		filepath.FromSlash("sites/default/files"): true,
+		filepath.FromSlash("sites/default"):       false,
+		filepath.FromSlash("uploads/2024"):        false, // never reached: the walk stops at uploads
+		"themes":                                  false,
+	} {
+		if got := d.Skips(rel); got != want {
+			t.Errorf("Skips(%q) = %v, want %v", rel, got, want)
+		}
 	}
 }

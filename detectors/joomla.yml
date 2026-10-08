@@ -20,3 +20,8 @@ plugins:
     version:
       - file: "templateDetails.xml"
         regex: '<version>([^<]+)<\/version>'
+skip:
+  - images
+  - cache
+  - tmp
+  - administrator/cache

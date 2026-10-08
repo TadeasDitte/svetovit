@@ -31,7 +31,8 @@ func run(args []string) int {
 	fs := pflag.NewFlagSet("svetovit", pflag.ContinueOnError)
 	target := fs.StringP("target", "t", ".", "path to the CMS install (or tenant directory holding several installs) to scan")
 	depth := fs.IntP("depth", "d", scanner.UnlimitedDepth, "max directory levels below --target to search for CMS installs (0 = target only, 1 = target's immediate subdirectories, ...); default is a full recursive search")
-	workers := fs.Int("workers", 0, "max concurrent filesystem operations while scanning (0 = automatic)")
+	workers := fs.Int("workers", scanner.DefaultWorkers, "max concurrent filesystem operations while scanning; raise it on fast local SSDs")
+	crossFS := fs.Bool("cross-filesystems", false, "descend into directories mounted from other filesystems (NFS, backup mounts, ...) below --target")
 	serverURL := fs.StringP("server", "S", os.Getenv("ROZHANITSY_URL"), "Rozhanitsy server base URL (env ROZHANITSY_URL)")
 	token := fs.StringP("token", "T", os.Getenv("SCAN_TOKEN"), "optional Rozhanitsy bearer token (env SCAN_TOKEN); the API is public")
 	timeout := fs.Duration("timeout", 30*time.Second, "HTTP request timeout")
@@ -71,6 +72,7 @@ func run(args []string) int {
 
 	sc := scanner.New(registry, *depth)
 	sc.Workers = *workers
+	sc.CrossFilesystems = *crossFS
 	components, err := sc.Scan(*target)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "svetovit: scanning %s: %v\n", *target, err)
