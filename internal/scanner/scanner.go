@@ -33,11 +33,39 @@ const UnlimitedDepth = -1
 
 const DefaultWorkers = 4
 
+// Mode sets how much of an install is searched once it is found.
+type Mode int
+
+const (
+	// ModeSmall stops at an install root and reads only its plugins and their lock files.
+	ModeSmall Mode = iota
+	// ModeHalf also walks inside installs, finding nested installs and lock files, but skips the directories each
+	// detector lists under skip: (uploads, caches, storage).
+	ModeHalf
+	// ModeFull walks everything below the target except vendor/, node_modules/ and .git/.
+	ModeFull
+)
+
+func ParseMode(s string) (Mode, error) {
+	switch s {
+	case "small":
+		return ModeSmall, nil
+	case "half":
+		return ModeHalf, nil
+	case "full":
+		return ModeFull, nil
+	}
+	return 0, fmt.Errorf("mode must be small, half or full, got %q", s)
+}
+
 type Scanner struct {
-	registry *detector.Registry
-	maxDepth int
-	Workers  int
+	registry         *detector.Registry
+	maxDepth         int
+	Workers          int
+	Mode             Mode
 	CrossFilesystems bool
+	// OpsPerSecond caps filesystem operations across all workers; 0 means no cap.
+	OpsPerSecond int
 }
 
 func New(registry *detector.Registry, maxDepth int) *Scanner {
@@ -51,19 +79,26 @@ func (s *Scanner) workers() int {
 	return DefaultWorkers
 }
 
+// site is a detected install. In small mode the walk stops at its root and everything below it is read by the
+// detectors' plugin scan.
 type site struct {
 	root      string
+	entries   []fs.DirEntry
 	detectors []*detector.Detector
+	parent    *site // the install this one is nested in, if any
 }
 
+// skips reports whether dir is a skip: directory of this install or of any install it is nested in.
 func (st *site) skips(dir string) bool {
-	rel, err := filepath.Rel(st.root, dir)
-	if err != nil {
-		return false
-	}
-	for _, d := range st.detectors {
-		if d.Skips(rel) {
-			return true
+	for ; st != nil; st = st.parent {
+		rel, err := filepath.Rel(st.root, dir)
+		if err != nil {
+			continue
+		}
+		for _, d := range st.detectors {
+			if d.Skips(rel) {
+				return true
+			}
 		}
 	}
 	return false
@@ -71,7 +106,7 @@ func (st *site) skips(dir string) bool {
 
 type found struct {
 	mu        sync.Mutex
-	sites     []string
+	sites     []*site
 	lockfiles []string
 	err       error
 }
@@ -82,21 +117,29 @@ func (s *Scanner) Scan(root string) ([]Component, error) {
 		return nil, fmt.Errorf("resolving %s: %w", root, err)
 	}
 
-	result, err := s.walk(absRoot)
+	pace := newPacer(s.OpsPerSecond)
+	result, err := s.walk(absRoot, pace)
 	if err != nil {
 		return nil, err
 	}
-	sort.Strings(result.sites)
-	sort.Strings(result.lockfiles)
+	sort.Slice(result.sites, func(i, j int) bool { return result.sites[i].root < result.sites[j].root })
 
 	siteComponents := make([][]Component, len(result.sites))
+	siteLockfiles := make([][]string, len(result.sites))
 	s.parallel(len(result.sites), func(i int) {
-		siteComponents[i] = s.scanSite(result.sites[i])
+		siteComponents[i], siteLockfiles[i] = s.scanSite(result.sites[i], pace)
 	})
 
-	lockComponents := make([][]Component, len(result.lockfiles))
-	s.parallel(len(result.lockfiles), func(i int) {
-		path := result.lockfiles[i]
+	lockfiles := result.lockfiles
+	for _, l := range siteLockfiles {
+		lockfiles = append(lockfiles, l...)
+	}
+	sort.Strings(lockfiles)
+
+	lockComponents := make([][]Component, len(lockfiles))
+	s.parallel(len(lockfiles), func(i int) {
+		path := lockfiles[i]
+		pace.wait()
 		packages, err := lockfile.Parse(path)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: skipping %s: %v\n", path, err)
@@ -141,7 +184,7 @@ func (s *Scanner) parallel(n int, fn func(i int)) {
 	wg.Wait()
 }
 
-func (s *Scanner) walk(root string) (*found, error) {
+func (s *Scanner) walk(root string, pace *pacer) (*found, error) {
 	res := &found{}
 	sem := make(chan struct{}, s.workers())
 	var wg sync.WaitGroup
@@ -157,6 +200,7 @@ func (s *Scanner) walk(root string) (*found, error) {
 	visit = func(dir string, remaining int, in *site) {
 		defer wg.Done()
 
+		pace.wait()
 		sem <- struct{}{}
 		if checkDev && dir != root {
 			if info, err := os.Lstat(dir); err == nil {
@@ -177,9 +221,7 @@ func (s *Scanner) walk(root string) (*found, error) {
 					lockfiles = append(lockfiles, filepath.Join(dir, e.Name()))
 				}
 			}
-			if in == nil {
-				found = s.detectedBy(dir, func(name string) bool { _, ok := names[name]; return ok })
-			}
+			found = s.detectedBy(dir, func(name string) bool { _, ok := names[name]; return ok })
 		}
 		<-sem
 
@@ -191,12 +233,15 @@ func (s *Scanner) walk(root string) (*found, error) {
 		res.mu.Lock()
 		res.lockfiles = append(res.lockfiles, lockfiles...)
 		if found != nil {
-			res.sites = append(res.sites, dir)
+			found.entries = entries
+			found.parent = in
+			res.sites = append(res.sites, found)
 			in = found
 		}
 		res.mu.Unlock()
 
-		if remaining == 0 {
+		// In small mode an install is not descended into: its plugins and their lock files are found by scanSite.
+		if remaining == 0 || (found != nil && s.Mode == ModeSmall) {
 			return
 		}
 		for _, e := range entries {
@@ -204,7 +249,7 @@ func (s *Scanner) walk(root string) (*found, error) {
 				continue
 			}
 			child := filepath.Join(dir, e.Name())
-			if in != nil && in.skips(child) {
+			if s.Mode == ModeHalf && in.skips(child) {
 				continue
 			}
 			wg.Add(1)
@@ -251,28 +296,33 @@ func (s *Scanner) detectedBy(path string, has func(string) bool) *site {
 	return found
 }
 
-func (s *Scanner) scanSite(site string) []Component {
+// scanSite reads an install's core version and plugins. In small mode it also returns the lock files in the plugin
+// directories, which the walk did not enter; the site root's own lock files were already collected by the walk.
+func (s *Scanner) scanSite(st *site, pace *pacer) ([]Component, []string) {
 	var components []Component
+	var lockfiles []string
 
-	for _, d := range s.registry.All() {
-		if !d.Detect(site) {
-			continue
-		}
+	ls := detector.NewListing()
+	if pace != nil {
+		ls.Pace = pace.wait
+	}
+	ls.Seed(st.root, st.entries)
 
-		if version, err := d.CoreVersion(site); err == nil {
+	for _, d := range st.detectors {
+		if version, err := d.CoreVersion(st.root, ls); err == nil {
 			components = append(components, Component{
 				Vendor:  d.Name,
 				Product: d.Name,
 				Version: version,
-				LocalID: site,
+				LocalID: st.root,
 			})
 		} else {
-			fmt.Fprintf(os.Stderr, "warning: %s detected at %s but version unknown\n", d.Name, site)
+			fmt.Fprintf(os.Stderr, "warning: %s detected at %s but version unknown\n", d.Name, st.root)
 		}
 
-		plugins, err := d.DetectPlugins(site)
+		plugins, err := d.DetectPlugins(st.root, ls)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: %s plugins at %s: %v\n", d.Name, site, err)
+			fmt.Fprintf(os.Stderr, "warning: %s plugins at %s: %v\n", d.Name, st.root, err)
 			continue
 		}
 
@@ -283,8 +333,18 @@ func (s *Scanner) scanSite(site string) []Component {
 				LocalID:  p.Path,
 				Platform: d.Name,
 			})
+			if s.Mode != ModeSmall {
+				continue
+			}
+			// Usually already listed while looking for the version file, so this is free.
+			entries, _ := ls.ReadDir(p.Path)
+			for _, e := range entries {
+				if e.Type().IsRegular() && lockfile.IsLockfile(e.Name()) {
+					lockfiles = append(lockfiles, filepath.Join(p.Path, e.Name()))
+				}
+			}
 		}
 	}
 
-	return components
+	return components, lockfiles
 }

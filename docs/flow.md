@@ -5,10 +5,10 @@ End to end, from a directory on disk to a report. The API side is described in t
 
 ```mermaid
 flowchart TD
-    A[svetovit --target DIR] --> B[scanner.walk<br/>find CMS installs + lock files<br/>skips vendor/, node_modules/, .git/,<br/>install upload/cache dirs, other filesystems]
+    A[svetovit --target DIR] --> B[scanner.walk<br/>find CMS installs + lock files<br/>skips vendor/, node_modules/, .git/,<br/>other filesystems; --mode small stops at an install root,<br/>half skips its upload/cache dirs]
     B --> C{CMS marker found?}
     C -->|yes| D[detector: core version<br/>Component vendor=cms, product=cms]
-    D --> E[detector: extensions<br/>Component product=dir name, no vendor<br/>Platform=cms]
+    D --> E[detector: extensions + their lock files<br/>Component product=dir name, no vendor<br/>Platform=cms]
     C -->|lock file| F[lockfile parser<br/>composer.lock / pnpm-lock.yaml<br/>Component + ecosystem Packagist / npm]
     A --> G[system.Detect<br/>dpkg, rpm, apk, pacman, nix, pkg<br/>Component + distro ecosystem]
 

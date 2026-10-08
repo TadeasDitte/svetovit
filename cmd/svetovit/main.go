@@ -31,7 +31,9 @@ func run(args []string) int {
 	fs := pflag.NewFlagSet("svetovit", pflag.ContinueOnError)
 	target := fs.StringP("target", "t", ".", "path to the CMS install (or tenant directory holding several installs) to scan")
 	depth := fs.IntP("depth", "d", scanner.UnlimitedDepth, "max directory levels below --target to search for CMS installs (0 = target only, 1 = target's immediate subdirectories, ...); default is a full recursive search")
-	workers := fs.Int("workers", scanner.DefaultWorkers, "max concurrent filesystem operations while scanning; raise it on fast local SSDs")
+	aggressivity := fs.IntP("aggressivity", "a", scanner.DefaultAggressivity, "scan speed, 1 (gentlest) to 5 (fastest): 1 = 1 worker at <=100 fs ops/s, 2 = 2 workers at <=500 ops/s, 3 = 4 workers, 4 = 8, 5 = 16")
+	workers := fs.Int("workers", scanner.DefaultWorkers, "override the number of concurrent filesystem operations set by --aggressivity")
+	mode := fs.String("mode", "small", "how much of an install to search: small (plugins and their lock files only), half (everything inside installs, including nested installs, except upload/cache dirs), full (everything)")
 	crossFS := fs.Bool("cross-filesystems", false, "descend into directories mounted from other filesystems (NFS, backup mounts, ...) below --target")
 	serverURL := fs.StringP("server", "S", os.Getenv("ROZHANITSY_URL"), "Rozhanitsy server base URL (env ROZHANITSY_URL)")
 	token := fs.StringP("token", "T", os.Getenv("SCAN_TOKEN"), "optional Rozhanitsy bearer token (env SCAN_TOKEN); the API is public")
@@ -64,6 +66,20 @@ func run(args []string) int {
 		return 2
 	}
 
+	scanMode, err := scanner.ParseMode(*mode)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "svetovit: %v\n", err)
+		return 2
+	}
+	scanWorkers, opsPerSecond, err := scanner.Aggressivity(*aggressivity)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "svetovit: %v\n", err)
+		return 2
+	}
+	if fs.Changed("workers") {
+		scanWorkers = *workers
+	}
+
 	registry, err := detector.LoadFS(detectors.FS)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "svetovit: loading detectors: %v\n", err)
@@ -71,7 +87,9 @@ func run(args []string) int {
 	}
 
 	sc := scanner.New(registry, *depth)
-	sc.Workers = *workers
+	sc.Workers = scanWorkers
+	sc.OpsPerSecond = opsPerSecond
+	sc.Mode = scanMode
 	sc.CrossFilesystems = *crossFS
 	components, err := sc.Scan(*target)
 	if err != nil {

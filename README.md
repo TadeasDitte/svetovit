@@ -10,7 +10,9 @@ It looks for:
 - **Host OS packages**: Debian/Ubuntu (dpkg), RHEL-likes and SUSE (rpm), Alpine (apk), Arch (pacman), NixOS and FreeBSD (pkg).
 
 Everything found is sent to Rozhanitsy, and the findings are printed as a report or JSON.
-See [docs/flow.md](docs/flow.md) for how a scan works from start to finish.
+See [docs/flow.md](docs/flow.md) for how a scan works from start to finish, [docs/CLI.md](docs/CLI.md) for every
+option and when to use it, and [docs/support.md](docs/support.md) for the supported CMSes, lock files and OS package
+managers.
 
 ## Installation
 
@@ -46,12 +48,17 @@ working directory.
 ## Options
 
 ```
+  -a, --aggressivity int    scan speed, 1 (gentlest) to 5 (fastest): 1 = 1 worker at <=100 fs ops/s, 2 = 2 workers at
+                            <=500 ops/s, 3 = 4 workers, 4 = 8, 5 = 16 (default 3)
       --cross-filesystems   descend into directories mounted from other filesystems (NFS, backup mounts, ...) below --target
   -c, --confidence string   which results to report: bounded (known-vulnerable), unbound (unmatched), or all (default "all")
   -d, --depth int           max directory levels below --target to search for CMS installs (0 = target only,
                             1 = target's immediate subdirectories, ...); default is a full recursive search (default -1)
   -f, --format string       format output as json or quiet. quiet shows only errors (default "normal")
   -m, --min-score float     only report vulnerabilities with CVSS score >= this value
+      --mode string         how much of an install to search: small (plugins and their lock files only), half
+                            (everything inside installs, including nested installs, except upload/cache dirs),
+                            full (everything) (default "small")
       --oA string           also write the report to <basename>.txt and <basename>.json
       --oJ string           also write a JSON report to this file
       --oN string           also write the normal-format report to this file
@@ -61,7 +68,7 @@ working directory.
       --skip-system         don't check the host's OS packages (dpkg, rpm, apk, pacman, nix, FreeBSD pkg)
   -t, --target string       path to the directory to scan (default ".")
       --timeout duration    HTTP request timeout (default 30s)
-      --workers int         max concurrent filesystem operations while scanning; raise it on fast local SSDs (default 4)
+      --workers int         override the number of concurrent filesystem operations set by --aggressivity
   -T, --token string        optional Rozhanitsy bearer token (env SCAN_TOKEN); the API is public
 ```
 
@@ -70,9 +77,17 @@ working directory.
 - `--target` can be a single install or a directory holding many (for example a hosting server's tenant directories).
   Svetovit walks it up to `--depth` levels and reports each install separately; use `--per-location` to see the
   results grouped by install.
-- `vendor/`, `node_modules/` and `.git/` are never searched. Neither are an install's upload and cache directories
-  (for example `wp-content/uploads`, Drupal `sites/*/files`, Laravel `storage`), listed under `skip:` in each
-  [detector](detectors/).
+- `vendor/`, `node_modules/` and `.git/` are never searched; their packages come from the lock files.
+- `--mode` sets how much of an install is searched once it is found:
+  - **small** (default): the walk stops at the install's root. Below it, only the plugin, module and theme
+    directories named in its [detector](detectors/) are read, plus the lock files in the install root and in those
+    directories. Uploads, caches and core source trees are never listed, and an install nested inside another is
+    not found.
+  - **half**: the walk continues inside installs, so nested installs and lock files anywhere in them are found, but
+    the upload and cache directories listed under `skip:` in each detector (for example `wp-content/uploads`, Drupal
+    `sites/*/files`, Laravel `storage`) are left out.
+  - **full**: everything below `--target` is walked, including those upload and cache directories, which is where a
+    dropped copy of a CMS would hide. Expect several times the I/O of `small`.
 - The walk stays on the filesystem `--target` is on, like `find -xdev`; pass `--cross-filesystems` to follow mounts.
 - Host OS packages are checked in a separate request and reported in their own "System packages" block (the `system`
   key in JSON output). Use `--skip-system` to leave them out.
@@ -89,7 +104,8 @@ from Ansible or cron on many hosts:
 
 - point `--target` at the web root (e.g. `/var/www`), not `/`
 - run it at idle I/O priority: `ionice -c3 nice -n19 svetovit ...`
-- keep `--workers` at its default (4) on HDDs and network or shared storage
+- keep `--aggressivity` at 3 or below on HDDs and network or shared storage; `-a 1` or `-a 2` caps the scan at
+  100 or 500 filesystem operations per second, so it can run slowly in the background on a busy host
 - if hosts share a datastore or SAN, limit how many scan at once (Ansible `serial:` or a low `forks`)
 
 ## Exit codes

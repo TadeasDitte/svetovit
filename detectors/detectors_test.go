@@ -51,10 +51,9 @@ func TestEmbeddedDetectorSet(t *testing.T) {
 	}
 }
 
-// pluginVersions detects plugins under root and returns name -> version.
 func pluginVersions(t *testing.T, d *detector.Detector, root string) map[string]string {
 	t.Helper()
-	plugins, err := d.DetectPlugins(root)
+	plugins, err := d.DetectPlugins(root, detector.NewListing())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,10 +89,10 @@ func TestWordPress(t *testing.T) {
 	write(t, root, "wp-content/plugins/index.php", "<?php // Silence is golden")
 	write(t, root, "wp-content/themes/twenty/style.css", "/*\nTheme Name: Twenty\nVersion: 3.1\n*/\n")
 
-	if !d.Detect(root) {
+	if !detect(t, d, root) {
 		t.Fatal("not detected")
 	}
-	if v, err := d.CoreVersion(root); err != nil || v != "6.5.1" {
+	if v, err := d.CoreVersion(root, detector.NewListing()); err != nil || v != "6.5.1" {
 		t.Fatalf("core = %q, %v", v, err)
 	}
 	expect(t, pluginVersions(t, d, root), map[string]string{
@@ -110,10 +109,10 @@ func TestDrupal(t *testing.T) {
 	write(t, root, "themes/olivero/olivero.info.yml", "name: Olivero\nversion: \"10.2.3\"\n")
 	write(t, root, "modules/nover/nover.info.yml", "name: No version\n")
 
-	if !d.Detect(root) {
+	if !detect(t, d, root) {
 		t.Fatal("not detected")
 	}
-	if v, err := d.CoreVersion(root); err != nil || v != "10.2.3" {
+	if v, err := d.CoreVersion(root, detector.NewListing()); err != nil || v != "10.2.3" {
 		t.Fatalf("core = %q, %v", v, err)
 	}
 	expect(t, pluginVersions(t, d, root), map[string]string{
@@ -131,10 +130,10 @@ func TestJoomla(t *testing.T) {
 	write(t, root, "templates/cassiopeia/templateDetails.xml", "<extension><version>4.1</version></extension>")
 	write(t, root, "templates/cassiopeia/other.xml", "<extension><version>9.9</version></extension>")
 
-	if !d.Detect(root) {
+	if !detect(t, d, root) {
 		t.Fatal("not detected")
 	}
-	if v, err := d.CoreVersion(root); err != nil || v != "5.0.3" {
+	if v, err := d.CoreVersion(root, detector.NewListing()); err != nil || v != "5.0.3" {
 		t.Fatalf("core = %q, %v", v, err)
 	}
 	expect(t, pluginVersions(t, d, root), map[string]string{
@@ -149,10 +148,10 @@ func TestLaravel(t *testing.T) {
 	write(t, root, "vendor/laravel/framework/src/Illuminate/Foundation/Application.php",
 		"<?php\nclass Application {\n    const VERSION = '11.9.2';\n}\n")
 
-	if !d.Detect(root) {
+	if !detect(t, d, root) {
 		t.Fatal("not detected")
 	}
-	if v, err := d.CoreVersion(root); err != nil || v != "11.9.2" {
+	if v, err := d.CoreVersion(root, detector.NewListing()); err != nil || v != "11.9.2" {
 		t.Fatalf("core = %q, %v", v, err)
 	}
 }
@@ -164,10 +163,10 @@ func TestPrestaShop(t *testing.T) {
 	write(t, root, "modules/ps_cart/config.xml", "<module><version><![CDATA[2.0.1]]></version></module>")
 	write(t, root, "themes/classic/config/theme.yml", "name: classic\nversion: 1.7.0\n")
 
-	if !d.Detect(root) {
+	if !detect(t, d, root) {
 		t.Fatal("not detected")
 	}
-	if v, err := d.CoreVersion(root); err != nil || v != "8.1.5" {
+	if v, err := d.CoreVersion(root, detector.NewListing()); err != nil || v != "8.1.5" {
 		t.Fatalf("core = %q, %v", v, err)
 	}
 	expect(t, pluginVersions(t, d, root), map[string]string{"ps_cart": "2.0.1", "classic": "1.7.0"})
@@ -176,7 +175,20 @@ func TestPrestaShop(t *testing.T) {
 	alt := t.TempDir()
 	write(t, alt, "config/settings.inc.php", "<?php // no version here")
 	write(t, alt, "app/AppKernel.php", "<?php\nclass AppKernel { const VERSION = '1.7.8.10'; }")
-	if v, err := d.CoreVersion(alt); err != nil || v != "1.7.8.10" {
+	if v, err := d.CoreVersion(alt, detector.NewListing()); err != nil || v != "1.7.8.10" {
 		t.Fatalf("fallback core = %q, %v", v, err)
 	}
+}
+
+func detect(t *testing.T, d *detector.Detector, root string) bool {
+	t.Helper()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, e := range entries {
+		names[e.Name()] = true
+	}
+	return d.DetectIn(root, func(name string) bool { return names[name] })
 }

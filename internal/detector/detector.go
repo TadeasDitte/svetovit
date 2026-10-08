@@ -3,6 +3,7 @@ package detector
 import (
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -28,6 +29,7 @@ type Detector struct {
 	Markers []string      `yaml:"markers"`
 	Version []VersionSpec `yaml:"version"`
 	Plugins []PluginSpec  `yaml:"plugins"`
+	// Skip lists directories below the install root that the walk never enters in half mode (uploads, caches).
 	Skip []string `yaml:"skip"`
 }
 
@@ -86,37 +88,18 @@ func compileSpecs(name, field string, specs []VersionSpec) error {
 	return nil
 }
 
-func (d *Detector) Detect(root string) bool {
-	for _, marker := range d.Markers {
-		if _, err := os.Stat(filepath.Join(root, marker)); err == nil {
-			return true
-		}
-	}
-	return false
-}
-
-func (d *Detector) CoreVersion(root string) (string, error) {
-	if version, ok := findVersion(root, d.Version); ok {
+func (d *Detector) CoreVersion(root string, ls *Listing) (string, error) {
+	if version, ok := findVersion(root, d.Version, ls); ok {
 		return version, nil
 	}
 	return "", fmt.Errorf("%s: no version found", d.Name)
 }
 
-func (d *Detector) DetectPlugins(root string) ([]Plugin, error) {
+func (d *Detector) DetectPlugins(root string, ls *Listing) ([]Plugin, error) {
 	var plugins []Plugin
 	for _, spec := range d.Plugins {
-		matches, err := filepath.Glob(filepath.Join(root, spec.Glob))
-		if err != nil {
-			return nil, fmt.Errorf("%s: invalid plugin glob: %w", d.Name, err)
-		}
-
-		for _, dir := range matches {
-			info, err := os.Stat(dir)
-			if err != nil || !info.IsDir() {
-				continue
-			}
-
-			version, ok := findVersion(dir, spec.Version)
+		for _, dir := range globDirs(root, spec.Glob, ls) {
+			version, ok := findVersion(dir, spec.Version, ls)
 			if !ok {
 				continue
 			}
@@ -132,9 +115,40 @@ func (d *Detector) DetectPlugins(root string) ([]Plugin, error) {
 	return plugins, nil
 }
 
-func findVersion(dir string, specs []VersionSpec) (string, bool) {
+// globDirs matches pattern below root against cached listings and returns only directories, in lexical order.
+func globDirs(root, pattern string, ls *Listing) []string {
+	dirs := []string{root}
+	for _, part := range strings.Split(filepath.ToSlash(pattern), "/") {
+		var next []string
+		for _, dir := range dirs {
+			entries, err := ls.ReadDir(dir)
+			if err != nil {
+				continue
+			}
+			for _, e := range entries {
+				if ok, _ := filepath.Match(part, e.Name()); ok && isDir(dir, e) {
+					next = append(next, filepath.Join(dir, e.Name()))
+				}
+			}
+		}
+		dirs = next
+	}
+	return dirs
+}
+
+// isDir trusts the dirent type and only stats symlinks, which may point at a directory.
+func isDir(parent string, e fs.DirEntry) bool {
+	if e.Type()&fs.ModeSymlink == 0 {
+		return e.IsDir()
+	}
+	info, err := os.Stat(filepath.Join(parent, e.Name()))
+	return err == nil && info.IsDir()
+}
+
+func findVersion(dir string, specs []VersionSpec, ls *Listing) (string, bool) {
 	for _, spec := range specs {
-		for _, path := range expand(dir, spec.File) {
+		for _, path := range expand(dir, spec.File, ls) {
+			ls.pace()
 			if version, err := extractVersion(path, spec.re); err == nil {
 				return version, true
 			}
@@ -143,21 +157,34 @@ func findVersion(dir string, specs []VersionSpec) (string, bool) {
 	return "", false
 }
 
-func expand(dir, pattern string) []string {
-	if !strings.ContainsAny(pattern, "*?[") {
+// expand resolves a version source against dir. A name directly in dir is checked against the cached listing, so
+// absent files are never opened. A glob tries the file named after dir first (foo/foo.php, foo/foo.info.yml), as
+// that is where an extension's manifest usually lives, which saves reading every other match.
+func expand(dir, pattern string, ls *Listing) []string {
+	if strings.ContainsRune(filepath.ToSlash(pattern), '/') {
 		return []string{filepath.Join(dir, pattern)}
 	}
-	entries, err := os.ReadDir(dir)
+	entries, err := ls.ReadDir(dir)
 	if err != nil {
 		return nil
+	}
+	preferred := ""
+	if rest, ok := strings.CutPrefix(pattern, "*"); ok && !strings.ContainsAny(rest, "*?[") {
+		preferred = filepath.Base(dir) + rest
 	}
 	var paths []string
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
-		if ok, _ := filepath.Match(pattern, e.Name()); ok {
-			paths = append(paths, filepath.Join(dir, e.Name()))
+		if ok, _ := filepath.Match(pattern, e.Name()); !ok {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		if e.Name() == preferred {
+			paths = append([]string{path}, paths...)
+		} else {
+			paths = append(paths, path)
 		}
 	}
 	return paths
@@ -170,12 +197,14 @@ func extractVersion(path string, re *regexp.Regexp) (string, error) {
 	}
 	defer f.Close()
 
-	data, err := io.ReadAll(io.LimitReader(f, maxVersionRead))
-	if err != nil {
+	// One read of the whole header instead of io.ReadAll's growing buffer.
+	buf := make([]byte, maxVersionRead)
+	n, err := io.ReadFull(f, buf)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
 		return "", err
 	}
 
-	match := re.FindSubmatch(data)
+	match := re.FindSubmatch(buf[:n])
 	if len(match) < 2 {
 		return "", fmt.Errorf("no version match in %s", path)
 	}
@@ -183,22 +212,27 @@ func extractVersion(path string, re *regexp.Regexp) (string, error) {
 	return string(match[1]), nil
 }
 
-func (d *Detector) Skips(rel string) bool {
-	for _, pattern := range d.Skip {
-		if ok, _ := filepath.Match(pattern, rel); ok {
+// DetectIn reports whether root is an install. has says whether a name is in root's listing: a marker directly in
+// root needs no further I/O, a nested one is stat-ed only when its first segment is listed.
+func (d *Detector) DetectIn(root string, has func(name string) bool) bool {
+	for _, marker := range d.Markers {
+		first, _, nested := strings.Cut(filepath.ToSlash(marker), "/")
+		if !has(first) {
+			continue
+		}
+		if !nested {
+			return true
+		}
+		if _, err := os.Stat(filepath.Join(root, marker)); err == nil {
 			return true
 		}
 	}
 	return false
 }
 
-func (d *Detector) DetectIn(root string, has func(name string) bool) bool {
-	for _, marker := range d.Markers {
-		first, _, _ := strings.Cut(filepath.ToSlash(marker), "/")
-		if !has(first) {
-			continue
-		}
-		if _, err := os.Stat(filepath.Join(root, marker)); err == nil {
+func (d *Detector) Skips(rel string) bool {
+	for _, pattern := range d.Skip {
+		if ok, _ := filepath.Match(pattern, rel); ok {
 			return true
 		}
 	}

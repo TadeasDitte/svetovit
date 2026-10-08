@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/TadeasDitte/Svetovit/detectors"
 	"github.com/TadeasDitte/Svetovit/internal/detector"
@@ -148,34 +150,18 @@ func locations(t *testing.T, root string, depth int) map[string]bool {
 	return locs
 }
 
-func TestNestedSiteIsNotReportedButItsLockfileIs(t *testing.T) {
-	root := t.TempDir()
-	outer := filepath.Join(root, "outer")
-	wpSite(t, outer)
-	wpSite(t, filepath.Join(outer, "blog")) // an install inside an install is not a separate site
-	write(t, filepath.Join(outer, "blog/composer.lock"), `{"packages":[{"name":"a/b","version":"1.0.0"}]}`)
-
-	locs := locations(t, root, UnlimitedDepth)
-	if !locs[outer] || locs[filepath.Join(outer, "blog")] {
-		t.Errorf("want only the outer site, got %v", locs)
-	}
-	if !locs[filepath.Join(outer, "blog/composer.lock")] {
-		t.Errorf("lock file inside a site should still be found: %v", locs)
-	}
-}
-
 func TestDepthLimitsSitesAndLockfiles(t *testing.T) {
 	root := t.TempDir()
-	wpSite(t, filepath.Join(root, "a"))                                                                     // depth 1
-	wpSite(t, filepath.Join(root, "x/y/deep"))                                                              // depth 3
-	write(t, filepath.Join(root, "a/sub/composer.lock"), `{"packages":[{"name":"a/b","version":"1.0.0"}]}`) // depth 3
+	wpSite(t, filepath.Join(root, "a"))                                                                   // depth 1
+	wpSite(t, filepath.Join(root, "x/y/deep"))                                                            // depth 3
+	write(t, filepath.Join(root, "x/y/composer.lock"), `{"packages":[{"name":"a/b","version":"1.0.0"}]}`) // depth 3
 
 	shallow := locations(t, root, 1)
-	if !shallow[filepath.Join(root, "a")] || shallow[filepath.Join(root, "x/y/deep")] || shallow[filepath.Join(root, "a/sub/composer.lock")] {
+	if !shallow[filepath.Join(root, "a")] || shallow[filepath.Join(root, "x/y/deep")] || shallow[filepath.Join(root, "x/y/composer.lock")] {
 		t.Errorf("depth 1: %v", shallow)
 	}
 	full := locations(t, root, UnlimitedDepth)
-	if !full[filepath.Join(root, "x/y/deep")] || !full[filepath.Join(root, "a/sub/composer.lock")] {
+	if !full[filepath.Join(root, "x/y/deep")] || !full[filepath.Join(root, "x/y/composer.lock")] {
 		t.Errorf("unlimited depth: %v", full)
 	}
 }
@@ -232,20 +218,130 @@ func BenchmarkScanHostingTree(b *testing.B) {
 	}
 }
 
-func TestInstallUploadDirsAreNotSearched(t *testing.T) {
+func TestInstallIsNotWalkedBeyondPlugins(t *testing.T) {
 	root := t.TempDir()
 	site := filepath.Join(root, "site")
 	wpSite(t, site)
 	lock := `{"packages":[{"name":"a/b","version":"1.0.0"}]}`
-	write(t, filepath.Join(site, "wp-content/uploads/x/composer.lock"), lock)
+	write(t, filepath.Join(site, "composer.lock"), lock)
+	write(t, filepath.Join(site, "wp-content/themes/t/style.css"), "Version: 1.0")
 	write(t, filepath.Join(site, "wp-content/themes/t/composer.lock"), lock)
+	write(t, filepath.Join(site, "wp-content/uploads/x/composer.lock"), lock)
+	wpSite(t, filepath.Join(site, "blog"))
 	write(t, filepath.Join(root, "other/wp-content/uploads/composer.lock"), lock)
 
 	locs := locations(t, root, UnlimitedDepth)
-	if locs[filepath.Join(site, "wp-content/uploads/x/composer.lock")] {
-		t.Errorf("lock file under wp-content/uploads should not be found: %v", locs)
+	for _, want := range []string{
+		site,
+		filepath.Join(site, "composer.lock"),
+		filepath.Join(site, "wp-content/themes/t/composer.lock"), // a plugin's own packages
+		filepath.Join(root, "other/wp-content/uploads/composer.lock"),
+	} {
+		if !locs[want] {
+			t.Errorf("missing %s: %v", want, locs)
+		}
 	}
-	if !locs[filepath.Join(site, "wp-content/themes/t/composer.lock")] || !locs[filepath.Join(root, "other/wp-content/uploads/composer.lock")] {
-		t.Errorf("lock files outside skipped dirs lost: %v", locs)
+	for _, unwanted := range []string{
+		filepath.Join(site, "wp-content/uploads/x/composer.lock"),
+		filepath.Join(site, "blog"),
+	} {
+		if locs[unwanted] {
+			t.Errorf("%s is inside an install and should not be found: %v", unwanted, locs)
+		}
 	}
+}
+
+func TestModes(t *testing.T) {
+	root := t.TempDir()
+	site := filepath.Join(root, "site")
+	wpSite(t, site)
+	lock := `{"packages":[{"name":"a/b","version":"1.0.0"}]}`
+	write(t, filepath.Join(site, "wp-content/themes/t/style.css"), "Version: 1.0")
+	write(t, filepath.Join(site, "wp-content/themes/t/composer.lock"), lock)
+	write(t, filepath.Join(site, "tools/composer.lock"), lock)
+	write(t, filepath.Join(site, "wp-content/uploads/x/composer.lock"), lock)
+	wpSite(t, filepath.Join(site, "blog"))
+	wpSite(t, filepath.Join(site, "wp-content/uploads/dropped"))
+
+	reg, err := detector.LoadFS(detectors.FS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := map[string]string{
+		"theme lock":   filepath.Join(site, "wp-content/themes/t/composer.lock"),
+		"tools lock":   filepath.Join(site, "tools/composer.lock"),
+		"uploads lock": filepath.Join(site, "wp-content/uploads/x/composer.lock"),
+		"nested site":  filepath.Join(site, "blog"),
+		"uploads site": filepath.Join(site, "wp-content/uploads/dropped"),
+	}
+	for _, tt := range []struct {
+		mode Mode
+		want map[string]bool
+	}{
+		{ModeSmall, map[string]bool{"theme lock": true}},
+		{ModeHalf, map[string]bool{"theme lock": true, "tools lock": true, "nested site": true}},
+		{ModeFull, map[string]bool{"theme lock": true, "tools lock": true, "uploads lock": true, "nested site": true, "uploads site": true}},
+	} {
+		sc := New(reg, UnlimitedDepth)
+		sc.Mode = tt.mode
+		got, err := sc.Scan(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		locs := map[string]int{}
+		for _, c := range got {
+			locs[c.LocalID]++
+		}
+		if locs[site] != 1 {
+			t.Errorf("mode %d: outer site reported %d times", tt.mode, locs[site])
+		}
+		for name, path := range paths {
+			if (locs[path] > 0) != tt.want[name] {
+				t.Errorf("mode %d: %s found = %v, want %v", tt.mode, name, locs[path] > 0, tt.want[name])
+			}
+			if locs[path] > 1 {
+				t.Errorf("mode %d: %s reported %d times", tt.mode, name, locs[path])
+			}
+		}
+	}
+}
+
+func TestParseModeAndAggressivity(t *testing.T) {
+	for s, want := range map[string]Mode{"small": ModeSmall, "half": ModeHalf, "full": ModeFull} {
+		if got, err := ParseMode(s); err != nil || got != want {
+			t.Errorf("ParseMode(%q) = %v, %v", s, got, err)
+		}
+	}
+	if _, err := ParseMode("huge"); err == nil {
+		t.Error("want an error for an unknown mode")
+	}
+	for _, level := range []int{0, 6} {
+		if _, _, err := Aggressivity(level); err == nil {
+			t.Errorf("want an error for level %d", level)
+		}
+	}
+	if w, ops, _ := Aggressivity(DefaultAggressivity); w != DefaultWorkers || ops != 0 {
+		t.Errorf("default level should be unthrottled with %d workers, got %d workers, %d ops/s", DefaultWorkers, w, ops)
+	}
+}
+
+func TestPacerSpacesOperations(t *testing.T) {
+	p := newPacer(200)
+	start := time.Now()
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 5; j++ {
+				p.wait()
+			}
+		}()
+	}
+	wg.Wait()
+	if elapsed := time.Since(start); elapsed < 19*5*time.Millisecond {
+		t.Errorf("20 ops at 200/s took only %v", elapsed)
+	}
+	var none *pacer
+	none.wait()
 }
