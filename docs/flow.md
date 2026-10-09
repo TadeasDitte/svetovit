@@ -37,7 +37,12 @@ flowchart TD
     G -. nix only .-> Q[system.NixCPEs<br/>re-check flagged + ambiguous names<br/>under the exact nixpkgs vendor/product]
     Q --> H
 
-    V --> R[report.Print / WriteJSON<br/>per location optional]
+    V --> T{--state?}
+    T -->|yes| W[state.Sync<br/>new / still open / fixed after 2 clean scans /<br/>removed when location is gone;<br/>unscanned locations untouched]
+    W --> X[--notify-url: post undelivered events<br/>+ --renotify reminders]
+    T -->|no, --notify-url| X
+    W --> R[report.Print / WriteJSON<br/>per location optional<br/>+ changes since last scan]
+    T -->|no| R
     U --> R
     R --> S[exit 0 clean, 3 findings, 1 error, 2 usage]
 ```
@@ -51,3 +56,4 @@ flowchart TD
 | Vendor of a finding | `affected_range.vendor` from the check response | no extra `/vulnerabilities/{id}` lookups, which count against 60 requests/minute |
 | 429 | retried, honoring `Retry-After` (max 5) | the API is throttled |
 | WordPress plugin version | read from the file with a `Plugin Name:` header | a bundled library's `Version:` line in another file is not the plugin's version |
+| Finding resolution with `--state` | fixed only after 2 consecutive scans of its location miss it; a deleted location is "removed"; locations not scanned this run are left alone | a failed or partial scan must not look like a clean one |

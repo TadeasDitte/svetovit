@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/TadeasDitte/Svetovit/internal/report"
 )
@@ -57,5 +58,24 @@ func TestWriteReportFile(t *testing.T) {
 	err = writeReportFile(filepath.Join(t.TempDir(), "missing", "out.txt"), func(io.Writer) error { return nil })
 	if err == nil || !strings.Contains(err.Error(), "creating") {
 		t.Errorf("got %v", err)
+	}
+}
+
+func TestParseDays(t *testing.T) {
+	tests := map[string]time.Duration{
+		"":     0,
+		"7d":   7 * 24 * time.Hour,
+		"1.5d": 36 * time.Hour,
+		"12h":  12 * time.Hour,
+	}
+	for in, want := range tests {
+		if got, err := parseDays(in); err != nil || got != want {
+			t.Errorf("parseDays(%q) = %v, %v; want %v", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"d", "xd", "-1d", "-2h", "week"} {
+		if _, err := parseDays(in); err == nil {
+			t.Errorf("parseDays(%q): want error", in)
+		}
 	}
 }

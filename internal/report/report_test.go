@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/TadeasDitte/Svetovit/internal/rozhanitsy"
+	"github.com/TadeasDitte/Svetovit/internal/state"
 )
 
 var checkedAt = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
@@ -54,7 +55,7 @@ func TestFilterApply(t *testing.T) {
 
 func TestPrintSortsBySeverityThenScore(t *testing.T) {
 	var buf bytes.Buffer
-	Print(&buf, &rozhanitsy.CheckResponse{CheckedAt: checkedAt, Vulnerable: sampleVulns()}, nil, Sections{Bounded: true}, false)
+	Print(&buf, &rozhanitsy.CheckResponse{CheckedAt: checkedAt, Vulnerable: sampleVulns()}, nil, nil, Sections{Bounded: true}, false)
 	out := buf.String()
 
 	if !strings.HasPrefix(out, "Scan checked at 2026-01-02T03:04:05Z\n") {
@@ -84,7 +85,7 @@ func TestPrintSortsBySeverityThenScore(t *testing.T) {
 
 func TestPrintDoesNotMutateInput(t *testing.T) {
 	vulns := sampleVulns()
-	Print(&bytes.Buffer{}, &rozhanitsy.CheckResponse{CheckedAt: checkedAt, Vulnerable: vulns}, nil, Sections{Bounded: true}, false)
+	Print(&bytes.Buffer{}, &rozhanitsy.CheckResponse{CheckedAt: checkedAt, Vulnerable: vulns}, nil, nil, Sections{Bounded: true}, false)
 	if vulns[0].CVEID != "CVE-LOW" {
 		t.Error("Print reordered the caller's slice")
 	}
@@ -97,7 +98,7 @@ func TestPrintSingularAndEmpty(t *testing.T) {
 		Vulnerable: sampleVulns()[:1],
 		Unmatched:  []rozhanitsy.UnmatchedComponent{{Vendor: "v", Product: "p", LocalID: "/x", Ambiguous: true}},
 	}
-	Print(&buf, resp, nil, Sections{Bounded: true, Unbound: true}, false)
+	Print(&buf, resp, nil, nil, Sections{Bounded: true, Unbound: true}, false)
 	out := buf.String()
 	for _, want := range []string{
 		"1 known vulnerability found:",
@@ -110,7 +111,7 @@ func TestPrintSingularAndEmpty(t *testing.T) {
 	}
 
 	buf.Reset()
-	Print(&buf, &rozhanitsy.CheckResponse{CheckedAt: checkedAt}, nil, Sections{Bounded: true, Unbound: true}, false)
+	Print(&buf, &rozhanitsy.CheckResponse{CheckedAt: checkedAt}, nil, nil, Sections{Bounded: true, Unbound: true}, false)
 	out = buf.String()
 	for _, want := range []string{"No known vulnerabilities found", "No unmatched components."} {
 		if !strings.Contains(out, want) {
@@ -126,12 +127,12 @@ func TestPrintHonoursSections(t *testing.T) {
 		Unmatched:  []rozhanitsy.UnmatchedComponent{{Product: "p"}},
 	}
 	var buf bytes.Buffer
-	Print(&buf, resp, nil, Sections{Bounded: true}, false)
+	Print(&buf, resp, nil, nil, Sections{Bounded: true}, false)
 	if strings.Contains(buf.String(), "could not be matched") {
 		t.Errorf("unbound section should be hidden:\n%s", buf.String())
 	}
 	buf.Reset()
-	Print(&buf, resp, nil, Sections{Unbound: true}, false)
+	Print(&buf, resp, nil, nil, Sections{Unbound: true}, false)
 	if strings.Contains(buf.String(), "known vulnerab") {
 		t.Errorf("bounded section should be hidden:\n%s", buf.String())
 	}
@@ -146,7 +147,7 @@ func TestPrintByLocation(t *testing.T) {
 		},
 	}
 	var buf bytes.Buffer
-	Print(&buf, resp, nil, Sections{Bounded: true, Unbound: true}, true)
+	Print(&buf, resp, nil, nil, Sections{Bounded: true, Unbound: true}, true)
 	out := buf.String()
 	if a, z := strings.Index(out, "Location: /a"), strings.Index(out, "Location: /z"); a < 0 || z < 0 || a > z {
 		t.Errorf("locations missing or unsorted:\n%s", out)
@@ -156,7 +157,7 @@ func TestPrintByLocation(t *testing.T) {
 	}
 
 	buf.Reset()
-	Print(&buf, &rozhanitsy.CheckResponse{CheckedAt: checkedAt}, nil, Sections{Bounded: true}, true)
+	Print(&buf, &rozhanitsy.CheckResponse{CheckedAt: checkedAt}, nil, nil, Sections{Bounded: true}, true)
 	if !strings.Contains(buf.String(), "No locations to report") {
 		t.Errorf("got:\n%s", buf.String())
 	}
@@ -172,7 +173,7 @@ func TestPrintSystemBlock(t *testing.T) {
 		},
 	}
 	var buf bytes.Buffer
-	Print(&buf, &rozhanitsy.CheckResponse{CheckedAt: checkedAt}, sys, Sections{Bounded: true, Unbound: true}, false)
+	Print(&buf, &rozhanitsy.CheckResponse{CheckedAt: checkedAt}, sys, nil, Sections{Bounded: true, Unbound: true}, false)
 	out := buf.String()
 	for _, want := range []string{
 		"System packages: Debian 12 (Debian:12)",
@@ -187,7 +188,7 @@ func TestPrintSystemBlock(t *testing.T) {
 	// No ecosystem (NixOS): heading is just the name.
 	buf.Reset()
 	sys.Ecosystem = ""
-	Print(&buf, &rozhanitsy.CheckResponse{CheckedAt: checkedAt}, sys, Sections{Bounded: true}, false)
+	Print(&buf, &rozhanitsy.CheckResponse{CheckedAt: checkedAt}, sys, nil, Sections{Bounded: true}, false)
 	if !strings.Contains(buf.String(), "System packages: Debian 12\n") {
 		t.Errorf("got:\n%s", buf.String())
 	}
@@ -209,7 +210,7 @@ func TestWriteJSONFlat(t *testing.T) {
 		ByLocation: map[string]*rozhanitsy.LocationReport{"/a": {}},
 	}
 	var buf bytes.Buffer
-	if err := WriteJSON(&buf, resp, nil, Sections{Bounded: true, Unbound: true}, false); err != nil {
+	if err := WriteJSON(&buf, resp, nil, nil, Sections{Bounded: true, Unbound: true}, false); err != nil {
 		t.Fatal(err)
 	}
 	out := decode(t, &buf)
@@ -235,7 +236,7 @@ func TestWriteJSONSectionsHideData(t *testing.T) {
 		Unmatched:  []rozhanitsy.UnmatchedComponent{{Product: "p"}},
 	}
 	var buf bytes.Buffer
-	if err := WriteJSON(&buf, resp, nil, Sections{Bounded: true}, false); err != nil {
+	if err := WriteJSON(&buf, resp, nil, nil, Sections{Bounded: true}, false); err != nil {
 		t.Fatal(err)
 	}
 	out := decode(t, &buf)
@@ -259,7 +260,7 @@ func TestWriteJSONByLocationAndSystem(t *testing.T) {
 		Unmatched: []rozhanitsy.UnmatchedComponent{{Product: "musl"}},
 	}}
 	var buf bytes.Buffer
-	if err := WriteJSON(&buf, resp, sys, Sections{Bounded: true}, true); err != nil {
+	if err := WriteJSON(&buf, resp, sys, nil, Sections{Bounded: true}, true); err != nil {
 		t.Fatal(err)
 	}
 	out := decode(t, &buf)
@@ -280,5 +281,39 @@ func TestWriteJSONByLocationAndSystem(t *testing.T) {
 	}
 	if s["by_location"] != nil {
 		t.Errorf("system is never reported by location: %v", s["by_location"])
+	}
+}
+
+func TestPrintChanges(t *testing.T) {
+	changes := &state.Changes{
+		New:        []state.Event{{Kind: state.New}},
+		Fixed:      []state.Event{{Kind: state.Fixed, DaysOpen: 12, Finding: state.Finding{Location: "/www/shop", Component: "woocommerce", Version: "8.1.0", AdvisoryID: "CVE-FIXED", Severity: "HIGH", Score: 7.5}}},
+		Open:       3,
+		OldestOpen: checkedAt.AddDate(0, 0, -34),
+	}
+	var buf bytes.Buffer
+	Print(&buf, &rozhanitsy.CheckResponse{CheckedAt: checkedAt}, nil, changes, Sections{Bounded: true}, false)
+	out := buf.String()
+	for _, want := range []string{"Since last scan: 1 new, 1 fixed, 0 removed; 3 open, oldest open for 34 days", "Fixed:", "CVE-FIXED", "12d", "/www/shop"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+
+	buf.Reset()
+	if err := WriteJSON(&buf, &rozhanitsy.CheckResponse{CheckedAt: checkedAt}, nil, changes, Sections{Bounded: true}, false); err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Changes struct {
+			Fixed []map[string]any `json:"fixed"`
+			Open  int              `json:"open"`
+		} `json:"changes"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Changes.Open != 3 || len(got.Changes.Fixed) != 1 || got.Changes.Fixed[0]["advisory_id"] != "CVE-FIXED" {
+		t.Fatalf("changes JSON: %s", buf.String())
 	}
 }

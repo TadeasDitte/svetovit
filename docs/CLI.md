@@ -152,6 +152,55 @@ Also write the report to files, independent of `--format`: `--oN` the normal rep
 `<basename>.txt` and `<basename>.json`. For example `-f quiet --oA /var/log/svetovit/$(date +%F)` keeps a daily
 record without printing anything.
 
+## Tracking and notifications
+
+### `--state[=<path>]` (env `SVETOVIT_STATE`)
+
+Keep every finding in a SQLite database, so each run can report what changed since the previous one. The report
+gets a "Since last scan" section (`changes` in JSON) with the counts of new, fixed and removed findings, the number
+still open and the age of the oldest, plus a table of what was fixed or removed.
+
+`--state` without a value uses `/var/lib/svetovit/state.db` when running as root, otherwise
+`$XDG_STATE_HOME/svetovit/state.db` (`~/.local/state/...`; `%LocalAppData%\svetovit\state.db` on Windows). A path
+must be given with `=`: `--state=/srv/svetovit.db`. The database is opened before the scan starts, so an unwritable
+path fails straight away instead of after a long walk.
+
+A finding is one advisory affecting one component version at one location (install root, plugin directory or lock
+file). From one run to the next:
+
+| Situation | Result |
+|---|---|
+| in this scan, not in the database (or resolved there) | **new** |
+| in this scan and open in the database | still open; nothing is announced |
+| missing from 2 consecutive scans of its location | **fixed** |
+| its location below `--target` no longer exists, for 2 consecutive runs | **removed**: the site or plugin was deleted, not updated |
+| its location was not scanned this run (another `--target`, an unreadable directory, a lock file that failed to parse, `--skip-system`), or it falls outside this run's `-m` / `-s` filters | left alone |
+
+A run that fails (exit 1) never updates the database, so a failed API request cannot mark everything fixed. Two
+scans running at the same time wait for each other.
+
+### `--notify-url <url>` (env `SVETOVIT_NOTIFY_URL`)
+
+Post findings to a chat webhook. The format follows the URL:
+
+- `https://hooks.slack.com/...`: a Slack message
+- `https://discord.com/api/webhooks/...`: a Discord message, kept under Discord's 2000-character limit
+- anything else: JSON with a ready-made Markdown `text` (which Mattermost and Rocket.Chat incoming webhooks display
+  as-is) and an `events` list (`type`, `location`, `component`, `version`, `advisory_id`, `severity`, `score`,
+  `fixed_in`, `first_seen`, `days_open`) for your own tooling
+
+With `--state`, only changes are posted: new findings once, then their resolution as fixed or removed. A run with no
+changes posts nothing. If the webhook cannot be reached the scan still succeeds (with a warning) and the messages are
+sent on the next run. Without `--state`, every run posts all current findings.
+
+Long lists are cut with "…and N more"; the full list is in the report and in the generic payload's `events`.
+
+### `--renotify <duration>`
+
+With `--state`, post a "still vulnerable (N days)" reminder about critical and high findings that are still open
+this long after they were last announced, e.g. `--renotify 7d` for a weekly reminder. Accepts days (`7d`) or Go
+durations (`36h`). Off by default: a finding is announced once.
+
 ## Exit codes
 
 | Code | Meaning |
@@ -169,6 +218,9 @@ ionice -c3 nice -n19 svetovit -a 1 -t /var/www -c bounded -f quiet --oA /var/log
 
 # incident response: everything, including installs hidden in upload directories
 svetovit -t /var/www --mode full -a 5 -l
+
+# hourly cron job posting only changes to Slack, with a weekly reminder about open critical/high findings
+svetovit -t /var/www -c bounded -f quiet --state --notify-url "$SLACK_WEBHOOK" --renotify 7d
 
 # one site, high and critical only, as JSON
 svetovit -t /var/www/shop -s critical,high -f json --skip-system

@@ -5,8 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,9 +18,11 @@ import (
 
 	"github.com/TadeasDitte/Svetovit/detectors"
 	"github.com/TadeasDitte/Svetovit/internal/detector"
+	"github.com/TadeasDitte/Svetovit/internal/notify"
 	"github.com/TadeasDitte/Svetovit/internal/report"
 	"github.com/TadeasDitte/Svetovit/internal/rozhanitsy"
 	"github.com/TadeasDitte/Svetovit/internal/scanner"
+	"github.com/TadeasDitte/Svetovit/internal/state"
 	"github.com/TadeasDitte/Svetovit/internal/system"
 )
 
@@ -51,8 +56,23 @@ func run(args []string) int {
 	format := fs.StringP("format", "f", "normal", "format output as json or quiet. quiet shows only errors")
 	skipSystem := fs.Bool("skip-system", false, "don't check the host's OS packages (dpkg, rpm, apk, pacman, nix, FreeBSD pkg)")
 
+	statePath := fs.String("state", os.Getenv("SVETOVIT_STATE"), "keep findings in a SQLite database at this path (env SVETOVIT_STATE) to report what is new, fixed or still open; --state alone uses "+state.DefaultPath())
+	fs.Lookup("state").NoOptDefVal = "default"
+	notifyURL := fs.String("notify-url", os.Getenv("SVETOVIT_NOTIFY_URL"), "post findings to this webhook (env SVETOVIT_NOTIFY_URL): Slack, Discord, or generic JSON; with --state only changes are posted")
+	renotifyFlag := fs.String("renotify", "", "with --state, remind about critical and high findings still open this long after the last message, e.g. 7d or 12h")
+
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "svetovit: %v\n", err)
+		return 2
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "svetovit: unexpected argument %q (a path for --state is given as --state=<path>)\n", fs.Arg(0))
+		return 2
+	}
+
+	renotify, err := parseDays(*renotifyFlag)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "svetovit: invalid --renotify value: %v\n", err)
 		return 2
 	}
 
@@ -84,6 +104,19 @@ func run(args []string) int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "svetovit: loading detectors: %v\n", err)
 		return 1
+	}
+
+	var store *state.Store
+	if *statePath == "default" {
+		*statePath = state.DefaultPath()
+	}
+	if *statePath != "" {
+		store, err = state.Open(*statePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "svetovit: %v\n", err)
+			return 1
+		}
+		defer store.Close()
 	}
 
 	sc := scanner.New(registry, *depth)
@@ -138,11 +171,61 @@ func run(args []string) int {
 		}
 	}
 
+	now := time.Now()
+	findings := collectFindings(resp, sys)
+	var changes *state.Changes
+	var events []state.Event
+	if store != nil {
+		scanned := make(map[string]bool, len(components)+1)
+		for _, c := range components {
+			scanned[c.LocalID] = true
+		}
+		if sys != nil {
+			scanned[sys.Source] = true
+		}
+		absTarget, _ := filepath.Abs(*target)
+		changes, err = store.Sync(state.Run{
+			Now:        now,
+			Findings:   findings,
+			Scanned:    scanned,
+			TargetRoot: absTarget,
+			InScope:    report.Filter{MinScore: *minScore, Severities: severities}.Matches,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "svetovit: %v\n", err)
+			return 1
+		}
+		if events, err = store.Pending(now, renotify); err != nil {
+			fmt.Fprintf(os.Stderr, "svetovit: %v\n", err)
+			return 1
+		}
+	} else if *notifyURL != "" {
+		for _, f := range findings {
+			events = append(events, state.Event{Kind: state.Current, Finding: f})
+		}
+	}
+
+	delivered := true
+	if *notifyURL != "" {
+		host, _ := os.Hostname()
+		if err := notify.Send(ctx, &http.Client{Timeout: *timeout}, *notifyURL, host, events); err != nil {
+			// Not fatal: the events stay pending and are sent with the next run.
+			fmt.Fprintf(os.Stderr, "svetovit: %v\n", err)
+			delivered = false
+		}
+	}
+	if store != nil && delivered {
+		if err := store.MarkDelivered(events, now); err != nil {
+			fmt.Fprintf(os.Stderr, "svetovit: %v\n", err)
+			return 1
+		}
+	}
+
 	switch strings.ToLower(strings.TrimSpace(*format)) {
 	case "", "normal":
-		report.Print(os.Stdout, resp, sys, sections, *byLocations)
+		report.Print(os.Stdout, resp, sys, changes, sections, *byLocations)
 	case "json":
-		report.WriteJSON(os.Stdout, resp, sys, sections, *byLocations)
+		report.WriteJSON(os.Stdout, resp, sys, changes, sections, *byLocations)
 	case "quiet":
 		// nothing
 	default:
@@ -152,14 +235,14 @@ func run(args []string) int {
 
 	outputs := map[string]func(io.Writer) error{}
 	if *outNormal != "" {
-		outputs[*outNormal] = func(w io.Writer) error { report.Print(w, resp, sys, sections, *byLocations); return nil }
+		outputs[*outNormal] = func(w io.Writer) error { report.Print(w, resp, sys, changes, sections, *byLocations); return nil }
 	}
 	if *outJSON != "" {
-		outputs[*outJSON] = func(w io.Writer) error { return report.WriteJSON(w, resp, sys, sections, *byLocations) }
+		outputs[*outJSON] = func(w io.Writer) error { return report.WriteJSON(w, resp, sys, changes, sections, *byLocations) }
 	}
 	if *outAll != "" {
-		outputs[*outAll+".txt"] = func(w io.Writer) error { report.Print(w, resp, sys, sections, *byLocations); return nil }
-		outputs[*outAll+".json"] = func(w io.Writer) error { return report.WriteJSON(w, resp, sys, sections, *byLocations) }
+		outputs[*outAll+".txt"] = func(w io.Writer) error { report.Print(w, resp, sys, changes, sections, *byLocations); return nil }
+		outputs[*outAll+".json"] = func(w io.Writer) error { return report.WriteJSON(w, resp, sys, changes, sections, *byLocations) }
 	}
 	for path, write := range outputs {
 		if err := writeReportFile(path, write); err != nil {
@@ -174,8 +257,6 @@ func run(args []string) int {
 	return 0
 }
 
-// checkSystem checks the host's OS packages in a request of their own. Hosts without a
-// supported package manager are skipped with a notice rather than failing the scan.
 func checkSystem(client *rozhanitsy.Client, minScore float64, severities []string, includeLow bool) (*report.System, error) {
 	env, err := system.Detect()
 	if errors.Is(err, system.ErrUnsupported) {
@@ -211,7 +292,7 @@ func checkSystem(client *rozhanitsy.Client, minScore float64, severities []strin
 		resp = refineWithNixCPEs(client, components, resp, minScore, severities, includeLow)
 	}
 
-	return &report.System{Name: env.Name, Ecosystem: env.Ecosystem, Response: resp}, nil
+	return &report.System{Name: env.Name, Ecosystem: env.Ecosystem, Source: env.Source(), Response: resp}, nil
 }
 
 func parseSections(confidence string) (report.Sections, string, error) {
@@ -231,6 +312,53 @@ func parseSections(confidence string) (report.Sections, string, error) {
 	}
 }
 
+func collectFindings(resp *rozhanitsy.CheckResponse, sys *report.System) []state.Finding {
+	var findings []state.Finding
+	add := func(r *rozhanitsy.CheckResponse) {
+		for loc, entry := range r.ByLocation {
+			for _, v := range entry.Vulnerable {
+				component := v.Product
+				if v.Vendor != "" && v.Vendor != v.Product {
+					component = v.Vendor + "/" + v.Product
+				}
+				findings = append(findings, state.Finding{
+					Location:   loc,
+					Component:  component,
+					Version:    v.InstalledVersion,
+					AdvisoryID: v.CVEID,
+					Severity:   v.CVSSSeverity,
+					Score:      v.CVSSScore,
+					FixedIn:    v.FixedIn,
+				})
+			}
+		}
+	}
+	add(resp)
+	if sys != nil {
+		add(sys.Response)
+	}
+	return findings
+}
+
+func parseDays(s string) (time.Duration, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, nil
+	}
+	if n, ok := strings.CutSuffix(s, "d"); ok {
+		days, err := strconv.ParseFloat(n, 64)
+		if err != nil || days < 0 {
+			return 0, fmt.Errorf("%q is not a number of days", s)
+		}
+		return time.Duration(days * 24 * float64(time.Hour)), nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil || d < 0 {
+		return 0, fmt.Errorf("%q is not a duration like 7d or 12h", s)
+	}
+	return d, nil
+}
+
 func writeReportFile(path string, write func(io.Writer) error) error {
 	f, err := os.Create(path)
 	if err != nil {
@@ -240,9 +368,6 @@ func writeReportFile(path string, write func(io.Writer) error) error {
 	return write(f)
 }
 
-// refineWithNixCPEs re-checks flagged NixOS packages under the exact vendor/product nixpkgs records
-// for them. A bare name like "orc" also matches unrelated NVD products (Apache ORC); the CPE
-// picks the right one. Packages nixpkgs has no CPE for keep their bare-name results.
 func refineWithNixCPEs(client *rozhanitsy.Client, components []rozhanitsy.Component, resp *rozhanitsy.CheckResponse, minScore float64, severities []string, includeLow bool) *rozhanitsy.CheckResponse {
 	flagged := make(map[string]bool)
 	for _, v := range resp.Vulnerable {

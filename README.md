@@ -59,13 +59,20 @@ working directory.
       --mode string         how much of an install to search: small (plugins and their lock files only), half
                             (everything inside installs, including nested installs, except upload/cache dirs),
                             full (everything) (default "small")
+      --notify-url string   post findings to this webhook (env SVETOVIT_NOTIFY_URL): Slack, Discord, or generic JSON;
+                            with --state only changes are posted
       --oA string           also write the report to <basename>.txt and <basename>.json
       --oJ string           also write a JSON report to this file
       --oN string           also write the normal-format report to this file
   -l, --per-location        show report per location
+      --renotify string     with --state, remind about critical and high findings still open this long after the last
+                            message, e.g. 7d or 12h
   -S, --server string       Rozhanitsy server base URL (env ROZHANITSY_URL)
   -s, --severity string     comma-separated CVSS severities to report, e.g. critical,high
       --skip-system         don't check the host's OS packages (dpkg, rpm, apk, pacman, nix, FreeBSD pkg)
+      --state[="default"]   keep findings in a SQLite database at this path (env SVETOVIT_STATE) to report what is new,
+                            fixed or still open; --state alone uses /var/lib/svetovit/state.db as root, else
+                            ~/.local/state/svetovit/state.db
   -t, --target string       path to the directory to scan (default ".")
       --timeout duration    HTTP request timeout (default 30s)
       --workers int         override the number of concurrent filesystem operations set by --aggressivity
@@ -107,6 +114,20 @@ from Ansible or cron on many hosts:
 - keep `--aggressivity` at 3 or below on HDDs and network or shared storage; `-a 1` or `-a 2` caps the scan at
   100 or 500 filesystem operations per second, so it can run slowly in the background on a busy host
 - if hosts share a datastore or SAN, limit how many scan at once (Ansible `serial:` or a low `forks`)
+
+## Tracking changes and notifications
+
+With `--state`, Svetovit keeps its findings in a SQLite database and the report ends with what changed since the
+last run: new findings, fixed ones, removed ones (the site or plugin was deleted) and how long the rest have been
+open. A finding counts as fixed only after two consecutive scans of its location miss it, and a failed run never
+touches the database. `--notify-url` posts these changes to Slack, Discord or any JSON webhook, once each;
+`--renotify 7d` adds a weekly reminder about critical and high findings that are still open. See
+[docs/CLI.md](docs/CLI.md#tracking-and-notifications).
+
+```bash
+# hourly from cron: post only what changed
+svetovit -t /var/www -c bounded -f quiet --state --notify-url "$SLACK_WEBHOOK" --renotify 7d
+```
 
 ## Exit codes
 

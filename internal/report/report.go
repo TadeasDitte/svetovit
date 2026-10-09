@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/TadeasDitte/Svetovit/internal/rozhanitsy"
+	"github.com/TadeasDitte/Svetovit/internal/state"
 )
 
 var severityRank = map[string]int{
@@ -41,24 +42,33 @@ func (f Filter) Apply(vulns []rozhanitsy.Vulnerability) []rozhanitsy.Vulnerabili
 
 	var out []rozhanitsy.Vulnerability
 	for _, v := range vulns {
-		if v.CVSSScore < f.MinScore {
-			continue
+		if f.matches(allowed, v.CVSSSeverity, v.CVSSScore) {
+			out = append(out, v)
 		}
-		if len(allowed) > 0 && !allowed[strings.ToUpper(v.CVSSSeverity)] {
-			continue
-		}
-		out = append(out, v)
 	}
 	return out
+}
+
+func (f Filter) Matches(severity string, score float64) bool {
+	allowed := make(map[string]bool, len(f.Severities))
+	for _, s := range f.Severities {
+		allowed[strings.ToUpper(strings.TrimSpace(s))] = true
+	}
+	return f.matches(allowed, severity, score)
+}
+
+func (f Filter) matches(allowed map[string]bool, severity string, score float64) bool {
+	return score >= f.MinScore && (len(allowed) == 0 || allowed[strings.ToUpper(severity)])
 }
 
 type System struct {
 	Name      string
 	Ecosystem string
-	Response  *rozhanitsy.CheckResponse
+	Source   string
+	Response *rozhanitsy.CheckResponse
 }
 
-func Print(w io.Writer, resp *rozhanitsy.CheckResponse, system *System, sections Sections, byLocations bool) {
+func Print(w io.Writer, resp *rozhanitsy.CheckResponse, system *System, changes *state.Changes, sections Sections, byLocations bool) {
 	fmt.Fprintf(w, "Scan checked at %s\n\n", resp.CheckedAt.Format(time.RFC3339))
 
 	printApplications(w, resp, sections, byLocations)
@@ -80,6 +90,10 @@ func Print(w io.Writer, resp *rozhanitsy.CheckResponse, system *System, sections
 			fmt.Fprintf(w, "%d package%s could not be matched against the vulnerability database (see JSON output for the list).\n",
 				len(system.Response.Unmatched), suffix(len(system.Response.Unmatched)))
 		}
+	}
+
+	if changes != nil {
+		printChanges(w, changes, resp.CheckedAt)
 	}
 }
 
@@ -183,7 +197,8 @@ func printUnmatched(w io.Writer, unmatched []rozhanitsy.UnmatchedComponent) {
 
 type jsonReport struct {
 	rozhanitsy.CheckResponse
-	System *jsonSystem `json:"system,omitempty"`
+	System  *jsonSystem    `json:"system,omitempty"`
+	Changes *state.Changes `json:"changes,omitempty"`
 }
 
 type jsonSystem struct {
@@ -192,8 +207,8 @@ type jsonSystem struct {
 	rozhanitsy.CheckResponse
 }
 
-func WriteJSON(w io.Writer, resp *rozhanitsy.CheckResponse, system *System, sections Sections, byLocations bool) error {
-	out := jsonReport{CheckResponse: filterSections(resp, sections, byLocations)}
+func WriteJSON(w io.Writer, resp *rozhanitsy.CheckResponse, system *System, changes *state.Changes, sections Sections, byLocations bool) error {
+	out := jsonReport{CheckResponse: filterSections(resp, sections, byLocations), Changes: changes}
 	if system != nil {
 		out.System = &jsonSystem{
 			Name:          system.Name,
@@ -260,4 +275,46 @@ func productName(v rozhanitsy.Vulnerability) string {
 		return v.Product
 	}
 	return v.Vendor + "/" + v.Product
+}
+
+func printChanges(w io.Writer, changes *state.Changes, now time.Time) {
+	fmt.Fprintf(w, "\nSince last scan: %d new, %d fixed, %d removed; %d open",
+		len(changes.New), len(changes.Fixed), len(changes.Removed), changes.Open)
+	if changes.Open > 0 && !changes.OldestOpen.IsZero() {
+		fmt.Fprintf(w, ", oldest open for %d day%s", daysSince(changes.OldestOpen, now), suffix(daysSince(changes.OldestOpen, now)))
+	}
+	fmt.Fprintln(w)
+
+	for _, list := range []struct {
+		title  string
+		events []state.Event
+	}{{"Fixed", changes.Fixed}, {"Removed (location no longer exists)", changes.Removed}} {
+		if len(list.events) == 0 {
+			continue
+		}
+		events := make([]state.Event, len(list.events))
+		copy(events, list.events)
+		sort.SliceStable(events, func(i, j int) bool {
+			if events[i].Severity != events[j].Severity {
+				return severityRank[events[i].Severity] > severityRank[events[j].Severity]
+			}
+			return events[i].Score > events[j].Score
+		})
+
+		fmt.Fprintf(w, "\n%s:\n\n", list.title)
+		tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
+		fmt.Fprintln(tw, "SEVERITY\tCVSS\tPRODUCT\tVERSION\tCVE\tOPEN FOR\tLOCATION")
+		for _, ev := range events {
+			fmt.Fprintf(tw, "%s\t%.1f\t%s\t%s\t%s\t%dd\t%s\n",
+				ev.Severity, ev.Score, ev.Component, ev.Version, ev.AdvisoryID, ev.DaysOpen, ev.Location)
+		}
+		tw.Flush()
+	}
+}
+
+func daysSince(t, now time.Time) int {
+	if now.Before(t) {
+		return 0
+	}
+	return int(now.Sub(t).Hours() / 24)
 }
