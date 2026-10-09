@@ -64,8 +64,8 @@ func (f Filter) matches(allowed map[string]bool, severity string, score float64)
 type System struct {
 	Name      string
 	Ecosystem string
-	Source   string
-	Response *rozhanitsy.CheckResponse
+	Source    string
+	Response  *rozhanitsy.CheckResponse
 }
 
 func Print(w io.Writer, resp *rozhanitsy.CheckResponse, system *System, changes *state.Changes, sections Sections, byLocations bool) {

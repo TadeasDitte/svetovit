@@ -18,7 +18,7 @@ func openTemp(t *testing.T) *Store {
 }
 
 func finding(loc, cve, severity string) Finding {
-	return Finding{Location: loc, Component: "plugin", Version: "1.0", AdvisoryID: cve, Severity: severity, Score: 9}
+	return Finding{Location: loc, Component: "plugin", Version: "1.0", AdvisoryID: cve, Severity: severity, Score: 9, Scope: Apps}
 }
 
 func doSync(t *testing.T, s *Store, run Run) *Changes {
@@ -152,9 +152,12 @@ func TestPendingAndRenotify(t *testing.T) {
 	sc := scanned("/www/a")
 	crit := finding("/www/a", "CVE-1", "CRITICAL")
 	med := finding("/www/a", "CVE-2", "MEDIUM")
+	if err := s.MarkDelivered("all", nil, day0); err != nil {
+		t.Fatal(err)
+	}
 	doSync(t, s, Run{Now: day0, Findings: []Finding{crit, med}, Scanned: sc})
 
-	ev, err := s.Pending(day0, 7*24*time.Hour)
+	ev, err := s.Pending("all", "", day0, 7*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,34 +166,34 @@ func TestPendingAndRenotify(t *testing.T) {
 	}
 
 	// Undelivered events stay pending.
-	if ev2, _ := s.Pending(day0, 0); len(ev2) != 2 {
+	if ev2, _ := s.Pending("all", "", day0, 0); len(ev2) != 2 {
 		t.Fatalf("events lost without MarkDelivered: %d", len(ev2))
 	}
-	if err := s.MarkDelivered(ev, day0); err != nil {
+	if err := s.MarkDelivered("all", ev, day0); err != nil {
 		t.Fatal(err)
 	}
-	if ev, _ = s.Pending(day0.AddDate(0, 0, 6), 7*24*time.Hour); len(ev) != 0 {
+	if ev, _ = s.Pending("all", "", day0.AddDate(0, 0, 6), 7*24*time.Hour); len(ev) != 0 {
 		t.Fatalf("want nothing pending, got %+v", ev)
 	}
 
-	ev, _ = s.Pending(day0.AddDate(0, 0, 8), 7*24*time.Hour)
+	ev, _ = s.Pending("all", "", day0.AddDate(0, 0, 8), 7*24*time.Hour)
 	if len(ev) != 1 || ev[0].Kind != StillOpen || ev[0].AdvisoryID != "CVE-1" || ev[0].DaysOpen != 8 {
 		t.Fatalf("want critical reminder only, got %+v", ev)
 	}
-	if ev, _ = s.Pending(day0.AddDate(0, 0, 8), 0); len(ev) != 0 {
+	if ev, _ = s.Pending("all", "", day0.AddDate(0, 0, 8), 0); len(ev) != 0 {
 		t.Fatalf("reminders without --renotify: %+v", ev)
 	}
 
 	doSync(t, s, Run{Now: day0.AddDate(0, 0, 9), Findings: []Finding{med}, Scanned: sc})
 	doSync(t, s, Run{Now: day0.AddDate(0, 0, 10), Findings: []Finding{med}, Scanned: sc})
-	ev, _ = s.Pending(day0.AddDate(0, 0, 10), 0)
+	ev, _ = s.Pending("all", "", day0.AddDate(0, 0, 10), 0)
 	if len(ev) != 1 || ev[0].Kind != Fixed {
 		t.Fatalf("want fixed event, got %+v", ev)
 	}
-	if err := s.MarkDelivered(ev, day0.AddDate(0, 0, 10)); err != nil {
+	if err := s.MarkDelivered("all", ev, day0.AddDate(0, 0, 10)); err != nil {
 		t.Fatal(err)
 	}
-	if ev, _ = s.Pending(day0.AddDate(0, 0, 10), 0); len(ev) != 0 {
+	if ev, _ = s.Pending("all", "", day0.AddDate(0, 0, 10), 0); len(ev) != 0 {
 		t.Fatalf("fixed event repeated: %+v", ev)
 	}
 }
@@ -203,5 +206,84 @@ func TestOpenUnwritable(t *testing.T) {
 	}
 	if _, err := Open(filepath.Join(blocker, "state.db")); err == nil {
 		t.Fatal("want error for a path below a regular file")
+	}
+}
+
+func TestChannelsAreScopedAndIndependent(t *testing.T) {
+	s := openTemp(t)
+	for _, ch := range []string{"all", System, Apps} {
+		if err := s.MarkDelivered(ch, nil, day0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	app := finding("/www/a", "CVE-APP", "HIGH")
+	pkg := finding("/var/lib/dpkg/status", "CVE-PKG", "HIGH")
+	pkg.Scope = System
+	doSync(t, s, Run{Now: day0, Findings: []Finding{app, pkg}, Scanned: scanned(app.Location, pkg.Location)})
+
+	pending := func(channel, scope string) []Event {
+		t.Helper()
+		ev, err := s.Pending(channel, scope, day0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ev
+	}
+	if ev := pending(System, System); len(ev) != 1 || ev[0].AdvisoryID != "CVE-PKG" || ev[0].Kind != New {
+		t.Fatalf("system channel: %+v", ev)
+	}
+	if ev := pending(Apps, Apps); len(ev) != 1 || ev[0].AdvisoryID != "CVE-APP" {
+		t.Fatalf("apps channel: %+v", ev)
+	}
+
+	// The system webhook succeeds, the "all" webhook fails: only the system channel is marked.
+	if err := s.MarkDelivered(System, pending(System, System), day0); err != nil {
+		t.Fatal(err)
+	}
+	if ev := pending(System, System); len(ev) != 0 {
+		t.Fatalf("system channel repeated: %+v", ev)
+	}
+	if ev := pending("all", ""); len(ev) != 2 {
+		t.Fatalf("all channel lost events another channel delivered: %+v", ev)
+	}
+
+	// Resolutions only go to channels that announced the finding.
+	doSync(t, s, Run{Now: day0, Scanned: scanned(app.Location, pkg.Location)})
+	doSync(t, s, Run{Now: day0, Scanned: scanned(app.Location, pkg.Location)})
+	if ev := pending(System, System); len(ev) != 1 || ev[0].Kind != Fixed {
+		t.Fatalf("system channel resolution: %+v", ev)
+	}
+	if ev := pending("all", ""); len(ev) != 0 {
+		t.Fatalf("all channel told about fixes it never announced: %+v", ev)
+	}
+	if err := s.MarkDelivered(System, pending(System, System), day0); err != nil {
+		t.Fatal(err)
+	}
+
+	// A finding that comes back is announced again on every channel.
+	doSync(t, s, Run{Now: day0, Findings: []Finding{pkg}, Scanned: scanned(pkg.Location)})
+	if ev := pending(System, System); len(ev) != 1 || ev[0].Kind != New {
+		t.Fatalf("reopened finding on system channel: %+v", ev)
+	}
+}
+
+func TestNewChannelGetsBaseline(t *testing.T) {
+	s := openTemp(t)
+	doSync(t, s, Run{Now: day0, Findings: []Finding{finding("/www/a", "CVE-1", "HIGH")}, Scanned: scanned("/www/a")})
+
+	ev, err := s.Pending("all", "", day0.AddDate(0, 0, 30), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ev) != 1 || ev[0].Kind != Current || ev[0].DaysOpen != 30 {
+		t.Fatalf("want baseline, got %+v", ev)
+	}
+	if err := s.MarkDelivered("all", ev, day0.AddDate(0, 0, 30)); err != nil {
+		t.Fatal(err)
+	}
+
+	doSync(t, s, Run{Now: day0, Findings: []Finding{finding("/www/a", "CVE-1", "HIGH"), finding("/www/a", "CVE-2", "HIGH")}, Scanned: scanned("/www/a")})
+	if ev, _ = s.Pending("all", "", day0.AddDate(0, 0, 31), 0); len(ev) != 1 || ev[0].Kind != New || ev[0].AdvisoryID != "CVE-2" {
+		t.Fatalf("want one new after baseline, got %+v", ev)
 	}
 }

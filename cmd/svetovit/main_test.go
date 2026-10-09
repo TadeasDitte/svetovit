@@ -79,3 +79,9 @@ func TestParseDays(t *testing.T) {
 		}
 	}
 }
+
+func TestSystemWebhookNeedsSystemPackages(t *testing.T) {
+	if code := run([]string{"-S", "http://127.0.0.1:1", "--skip-system", "--notify-system-url", "http://127.0.0.1:1/hook"}); code != 2 {
+		t.Fatalf("exit code %d, want 2", code)
+	}
+}

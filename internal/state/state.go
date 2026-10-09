@@ -27,14 +27,27 @@ CREATE TABLE IF NOT EXISTS findings (
   fixed_in         TEXT,
   first_seen       INTEGER NOT NULL,
   last_seen        INTEGER NOT NULL,
+  scope            TEXT NOT NULL,
   clean_runs       INTEGER NOT NULL DEFAULT 0,
-  notified_at      INTEGER,
   resolved_at      INTEGER,
   resolution       TEXT,
-  resolve_notified INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (location, component, version, advisory_id)
 );
 CREATE INDEX IF NOT EXISTS findings_open ON findings (resolved_at);
+CREATE TABLE IF NOT EXISTS channels (
+  name  TEXT PRIMARY KEY,
+  since INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS deliveries (
+  channel          TEXT NOT NULL,
+  location         TEXT NOT NULL,
+  component        TEXT NOT NULL,
+  version          TEXT NOT NULL,
+  advisory_id      TEXT NOT NULL,
+  notified_at      INTEGER NOT NULL,
+  resolve_notified INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (channel, location, component, version, advisory_id)
+);
 `
 
 type Finding struct {
@@ -45,23 +58,29 @@ type Finding struct {
 	Severity   string  `json:"severity"`
 	Score      float64 `json:"score"`
 	FixedIn    string  `json:"fixed_in,omitempty"`
+	Scope      string  `json:"scope"`
 }
 
 type Kind string
 
 const (
-	New Kind = "new"
-	Fixed Kind = "fixed"
-	Removed Kind = "removed"
+	System = "system"
+	Apps   = "apps"
+)
+
+const (
+	New       Kind = "new"
+	Fixed     Kind = "fixed"
+	Removed   Kind = "removed"
 	StillOpen Kind = "still_open"
-	Current Kind = "current"
+	Current   Kind = "current"
 )
 
 type Event struct {
 	Kind Kind `json:"type"`
 	Finding
 	FirstSeen time.Time `json:"first_seen,omitzero"`
-	DaysOpen int `json:"days_open"`
+	DaysOpen  int       `json:"days_open"`
 }
 
 type Changes struct {
@@ -73,11 +92,11 @@ type Changes struct {
 }
 
 type Run struct {
-	Now      time.Time
-	Findings []Finding
-	Scanned map[string]bool
+	Now        time.Time
+	Findings   []Finding
+	Scanned    map[string]bool
 	TargetRoot string
-	InScope func(severity string, score float64) bool
+	InScope    func(severity string, score float64) bool
 }
 
 type Store struct {
@@ -162,23 +181,27 @@ func sync(tx *sql.Tx, run Run) (*Changes, error) {
 			f.Location, f.Component, f.Version, f.AdvisoryID).Scan(&resolved)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
-			_, err = tx.Exec(`INSERT INTO findings (location, component, version, advisory_id, severity, score, fixed_in, first_seen, last_seen)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				f.Location, f.Component, f.Version, f.AdvisoryID, f.Severity, f.Score, f.FixedIn, now, now)
+			_, err = tx.Exec(`INSERT INTO findings (location, component, version, advisory_id, severity, score, fixed_in, scope, first_seen, last_seen)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				f.Location, f.Component, f.Version, f.AdvisoryID, f.Severity, f.Score, f.FixedIn, f.Scope, now, now)
 			changes.New = append(changes.New, Event{Kind: New, Finding: f, FirstSeen: run.Now})
 		case err != nil:
 			return nil, err
 		case resolved.Valid:
 			// Back after being resolved (a restored backup, a downgrade): announce it again, counting from now.
-			_, err = tx.Exec(`UPDATE findings SET severity = ?, score = ?, fixed_in = ?, first_seen = ?, last_seen = ?, clean_runs = 0,
-				notified_at = NULL, resolved_at = NULL, resolution = NULL, resolve_notified = 0
+			_, err = tx.Exec(`UPDATE findings SET severity = ?, score = ?, fixed_in = ?, scope = ?, first_seen = ?, last_seen = ?, clean_runs = 0,
+				resolved_at = NULL, resolution = NULL
 				WHERE location = ? AND component = ? AND version = ? AND advisory_id = ?`,
-				f.Severity, f.Score, f.FixedIn, now, now, f.Location, f.Component, f.Version, f.AdvisoryID)
+				f.Severity, f.Score, f.FixedIn, f.Scope, now, now, f.Location, f.Component, f.Version, f.AdvisoryID)
+			if err == nil {
+				_, err = tx.Exec(`DELETE FROM deliveries WHERE location = ? AND component = ? AND version = ? AND advisory_id = ?`,
+					f.Location, f.Component, f.Version, f.AdvisoryID)
+			}
 			changes.New = append(changes.New, Event{Kind: New, Finding: f, FirstSeen: run.Now})
 		default:
-			_, err = tx.Exec(`UPDATE findings SET severity = ?, score = ?, fixed_in = ?, last_seen = ?, clean_runs = 0
+			_, err = tx.Exec(`UPDATE findings SET severity = ?, score = ?, fixed_in = ?, scope = ?, last_seen = ?, clean_runs = 0
 				WHERE location = ? AND component = ? AND version = ? AND advisory_id = ?`,
-				f.Severity, f.Score, f.FixedIn, now, f.Location, f.Component, f.Version, f.AdvisoryID)
+				f.Severity, f.Score, f.FixedIn, f.Scope, now, f.Location, f.Component, f.Version, f.AdvisoryID)
 		}
 		if err != nil {
 			return nil, err
@@ -243,13 +266,13 @@ type stored struct {
 	resolution string
 }
 
-const storedColumns = `location, component, version, advisory_id, COALESCE(severity, ''), COALESCE(score, 0), COALESCE(fixed_in, ''),
-	first_seen, clean_runs, COALESCE(resolution, '')`
+const storedColumns = `f.location, f.component, f.version, f.advisory_id, COALESCE(f.severity, ''), COALESCE(f.score, 0),
+	COALESCE(f.fixed_in, ''), f.scope, f.first_seen, f.clean_runs, COALESCE(f.resolution, '')`
 
 func query(q interface {
 	Query(string, ...any) (*sql.Rows, error)
-}, where string, args ...any) ([]stored, error) {
-	rows, err := q.Query(`SELECT `+storedColumns+` FROM findings WHERE `+where+` ORDER BY location, component, advisory_id`, args...)
+}, rest string, args ...any) ([]stored, error) {
+	rows, err := q.Query(`SELECT `+storedColumns+` FROM findings f `+rest+` ORDER BY f.location, f.component, f.advisory_id`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -260,7 +283,7 @@ func query(q interface {
 		var s stored
 		var first int64
 		if err := rows.Scan(&s.Location, &s.Component, &s.Version, &s.AdvisoryID, &s.Severity, &s.Score, &s.FixedIn,
-			&first, &s.cleanRuns, &s.resolution); err != nil {
+			&s.Scope, &first, &s.cleanRuns, &s.resolution); err != nil {
 			return nil, err
 		}
 		s.firstSeen = time.Unix(first, 0)
@@ -270,54 +293,89 @@ func query(q interface {
 }
 
 func openFindings(tx *sql.Tx) ([]stored, error) {
-	return query(tx, `resolved_at IS NULL`)
+	return query(tx, `WHERE f.resolved_at IS NULL`)
 }
 
-func (s *Store) Pending(now time.Time, renotify time.Duration) ([]Event, error) {
-	var events []Event
+const deliveryJoin = `LEFT JOIN deliveries d ON d.channel = ? AND d.location = f.location AND d.component = f.component
+	AND d.version = f.version AND d.advisory_id = f.advisory_id `
 
-	fresh, err := query(s.db, `resolved_at IS NULL AND notified_at IS NULL`)
-	if err != nil {
-		return nil, fmt.Errorf("state: %w", err)
-	}
-	for _, f := range fresh {
-		events = append(events, Event{Kind: New, Finding: f.Finding, FirstSeen: f.firstSeen, DaysOpen: days(f.firstSeen, now)})
-	}
-	resolved, err := query(s.db, `resolved_at IS NOT NULL AND resolve_notified = 0 AND notified_at IS NOT NULL`)
-	if err != nil {
-		return nil, fmt.Errorf("state: %w", err)
-	}
-	for _, f := range resolved {
-		events = append(events, Event{Kind: Kind(f.resolution), Finding: f.Finding, FirstSeen: f.firstSeen, DaysOpen: days(f.firstSeen, now)})
-	}
-
-	if renotify > 0 {
-		due, err := query(s.db, `resolved_at IS NULL AND notified_at IS NOT NULL AND notified_at <= ? AND UPPER(severity) IN ('CRITICAL', 'HIGH')`,
-			now.Add(-renotify).Unix())
+func (s *Store) Pending(channel, scope string, now time.Time, renotify time.Duration) ([]Event, error) {
+	pick := func(where string, extra ...any) ([]stored, error) {
+		args := append([]any{channel}, extra...)
+		if scope != "" {
+			where += ` AND f.scope = ?`
+			args = append(args, scope)
+		}
+		rows, err := query(s.db, deliveryJoin+where, args...)
 		if err != nil {
 			return nil, fmt.Errorf("state: %w", err)
 		}
-		for _, f := range due {
-			events = append(events, Event{Kind: StillOpen, Finding: f.Finding, FirstSeen: f.firstSeen, DaysOpen: days(f.firstSeen, now)})
+		return rows, nil
+	}
+	var events []Event
+	add := func(kind Kind, rows []stored) {
+		for _, f := range rows {
+			k := kind
+			if k == "" {
+				k = Kind(f.resolution)
+			}
+			events = append(events, Event{Kind: k, Finding: f.Finding, FirstSeen: f.firstSeen, DaysOpen: days(f.firstSeen, now)})
 		}
+	}
+
+	var known bool
+	if err := s.db.QueryRow(`SELECT EXISTS (SELECT 1 FROM channels WHERE name = ?)`, channel).Scan(&known); err != nil {
+		return nil, fmt.Errorf("state: %w", err)
+	}
+	fresh, err := pick(`WHERE f.resolved_at IS NULL AND d.channel IS NULL`)
+	if err != nil {
+		return nil, err
+	}
+	if !known {
+		add(Current, fresh)
+		return events, nil
+	}
+	add(New, fresh)
+
+	resolved, err := pick(`WHERE f.resolved_at IS NOT NULL AND d.channel IS NOT NULL AND d.resolve_notified = 0`)
+	if err != nil {
+		return nil, err
+	}
+	add("", resolved)
+
+	if renotify > 0 {
+		due, err := pick(`WHERE f.resolved_at IS NULL AND d.notified_at <= ? AND UPPER(f.severity) IN ('CRITICAL', 'HIGH')`,
+			now.Add(-renotify).Unix())
+		if err != nil {
+			return nil, err
+		}
+		add(StillOpen, due)
 	}
 	return events, nil
 }
 
-func (s *Store) MarkDelivered(events []Event, now time.Time) error {
+func (s *Store) MarkDelivered(channel string, events []Event, now time.Time) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("state: %w", err)
 	}
 	defer tx.Rollback()
 
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO channels (name, since) VALUES (?, ?)`, channel, now.Unix()); err != nil {
+		return fmt.Errorf("state: %w", err)
+	}
 	for _, ev := range events {
-		set := `notified_at = ?`
 		if ev.Kind == Fixed || ev.Kind == Removed {
-			set = `resolve_notified = 1, notified_at = COALESCE(notified_at, ?)`
+			_, err = tx.Exec(`UPDATE deliveries SET resolve_notified = 1
+				WHERE channel = ? AND location = ? AND component = ? AND version = ? AND advisory_id = ?`,
+				channel, ev.Location, ev.Component, ev.Version, ev.AdvisoryID)
+		} else {
+			_, err = tx.Exec(`INSERT INTO deliveries (channel, location, component, version, advisory_id, notified_at)
+				VALUES (?, ?, ?, ?, ?, ?)
+				ON CONFLICT (channel, location, component, version, advisory_id) DO UPDATE SET notified_at = excluded.notified_at`,
+				channel, ev.Location, ev.Component, ev.Version, ev.AdvisoryID, now.Unix())
 		}
-		if _, err := tx.Exec(`UPDATE findings SET `+set+` WHERE location = ? AND component = ? AND version = ? AND advisory_id = ?`,
-			now.Unix(), ev.Location, ev.Component, ev.Version, ev.AdvisoryID); err != nil {
+		if err != nil {
 			return fmt.Errorf("state: %w", err)
 		}
 	}

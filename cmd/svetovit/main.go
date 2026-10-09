@@ -59,6 +59,8 @@ func run(args []string) int {
 	statePath := fs.String("state", os.Getenv("SVETOVIT_STATE"), "keep findings in a SQLite database at this path (env SVETOVIT_STATE) to report what is new, fixed or still open; --state alone uses "+state.DefaultPath())
 	fs.Lookup("state").NoOptDefVal = "default"
 	notifyURL := fs.String("notify-url", os.Getenv("SVETOVIT_NOTIFY_URL"), "post findings to this webhook (env SVETOVIT_NOTIFY_URL): Slack, Discord, or generic JSON; with --state only changes are posted")
+	notifySystemURL := fs.String("notify-system-url", os.Getenv("SVETOVIT_NOTIFY_SYSTEM_URL"), "like --notify-url, but only the host's OS package findings, e.g. for the admins' channel (env SVETOVIT_NOTIFY_SYSTEM_URL)")
+	notifyAppsURL := fs.String("notify-apps-url", os.Getenv("SVETOVIT_NOTIFY_APPS_URL"), "like --notify-url, but only findings under --target (hosted sites), not OS packages (env SVETOVIT_NOTIFY_APPS_URL)")
 	renotifyFlag := fs.String("renotify", "", "with --state, remind about critical and high findings still open this long after the last message, e.g. 7d or 12h")
 
 	if err := fs.Parse(args); err != nil {
@@ -67,6 +69,11 @@ func run(args []string) int {
 	}
 	if fs.NArg() > 0 {
 		fmt.Fprintf(os.Stderr, "svetovit: unexpected argument %q (a path for --state is given as --state=<path>)\n", fs.Arg(0))
+		return 2
+	}
+
+	if *skipSystem && *notifySystemURL != "" {
+		fmt.Fprintln(os.Stderr, "svetovit: --notify-system-url needs the OS packages checked; drop --skip-system")
 		return 2
 	}
 
@@ -174,7 +181,6 @@ func run(args []string) int {
 	now := time.Now()
 	findings := collectFindings(resp, sys)
 	var changes *state.Changes
-	var events []state.Event
 	if store != nil {
 		scanned := make(map[string]bool, len(components)+1)
 		for _, c := range components {
@@ -195,29 +201,42 @@ func run(args []string) int {
 			fmt.Fprintf(os.Stderr, "svetovit: %v\n", err)
 			return 1
 		}
-		if events, err = store.Pending(now, renotify); err != nil {
-			fmt.Fprintf(os.Stderr, "svetovit: %v\n", err)
-			return 1
-		}
-	} else if *notifyURL != "" {
-		for _, f := range findings {
-			events = append(events, state.Event{Kind: state.Current, Finding: f})
-		}
 	}
 
-	delivered := true
-	if *notifyURL != "" {
-		host, _ := os.Hostname()
-		if err := notify.Send(ctx, &http.Client{Timeout: *timeout}, *notifyURL, host, events); err != nil {
+	host, _ := os.Hostname()
+	channels := []struct{ name, scope, url, title string }{
+		{"all", "", *notifyURL, "Svetovit scan on " + host},
+		{state.System, state.System, *notifySystemURL, "Svetovit: server packages on " + host},
+		{state.Apps, state.Apps, *notifyAppsURL, "Svetovit: hosted sites on " + host},
+	}
+	httpClient := &http.Client{Timeout: *timeout}
+	for _, ch := range channels {
+		if ch.url == "" {
+			continue
+		}
+		var events []state.Event
+		if store != nil {
+			if events, err = store.Pending(ch.name, ch.scope, now, renotify); err != nil {
+				fmt.Fprintf(os.Stderr, "svetovit: %v\n", err)
+				return 1
+			}
+		} else {
+			for _, f := range findings {
+				if ch.scope == "" || f.Scope == ch.scope {
+					events = append(events, state.Event{Kind: state.Current, Finding: f})
+				}
+			}
+		}
+		if err := notify.Send(ctx, httpClient, ch.url, ch.title, host, events); err != nil {
 			// Not fatal: the events stay pending and are sent with the next run.
 			fmt.Fprintf(os.Stderr, "svetovit: %v\n", err)
-			delivered = false
+			continue
 		}
-	}
-	if store != nil && delivered {
-		if err := store.MarkDelivered(events, now); err != nil {
-			fmt.Fprintf(os.Stderr, "svetovit: %v\n", err)
-			return 1
+		if store != nil {
+			if err := store.MarkDelivered(ch.name, events, now); err != nil {
+				fmt.Fprintf(os.Stderr, "svetovit: %v\n", err)
+				return 1
+			}
 		}
 	}
 
@@ -314,7 +333,7 @@ func parseSections(confidence string) (report.Sections, string, error) {
 
 func collectFindings(resp *rozhanitsy.CheckResponse, sys *report.System) []state.Finding {
 	var findings []state.Finding
-	add := func(r *rozhanitsy.CheckResponse) {
+	add := func(r *rozhanitsy.CheckResponse, scope string) {
 		for loc, entry := range r.ByLocation {
 			for _, v := range entry.Vulnerable {
 				component := v.Product
@@ -329,13 +348,14 @@ func collectFindings(resp *rozhanitsy.CheckResponse, sys *report.System) []state
 					Severity:   v.CVSSSeverity,
 					Score:      v.CVSSScore,
 					FixedIn:    v.FixedIn,
+					Scope:      scope,
 				})
 			}
 		}
 	}
-	add(resp)
+	add(resp, state.Apps)
 	if sys != nil {
-		add(sys.Response)
+		add(sys.Response, state.System)
 	}
 	return findings
 }

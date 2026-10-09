@@ -187,13 +187,34 @@ Post findings to a chat webhook. The format follows the URL:
 - `https://discord.com/api/webhooks/...`: a Discord message, kept under Discord's 2000-character limit
 - anything else: JSON with a ready-made Markdown `text` (which Mattermost and Rocket.Chat incoming webhooks display
   as-is) and an `events` list (`type`, `location`, `component`, `version`, `advisory_id`, `severity`, `score`,
-  `fixed_in`, `first_seen`, `days_open`) for your own tooling
+  `fixed_in`, `scope`, `first_seen`, `days_open`) for your own tooling
 
 With `--state`, only changes are posted: new findings once, then their resolution as fixed or removed. A run with no
 changes posts nothing. If the webhook cannot be reached the scan still succeeds (with a warning) and the messages are
 sent on the next run. Without `--state`, every run posts all current findings.
 
+The first time a webhook is used with an existing database, it gets one "N open" message with everything still open,
+instead of announcing years-old findings as new.
+
 Long lists are cut with "…and N more"; the full list is in the report and in the generic payload's `events`.
+
+### `--notify-system-url <url>`, `--notify-apps-url <url>` (env `SVETOVIT_NOTIFY_SYSTEM_URL`, `SVETOVIT_NOTIFY_APPS_URL`)
+
+The same as `--notify-url`, limited to one kind of finding:
+
+- `--notify-system-url`: only the host's OS packages (`scope: system`), the server's own vulnerabilities
+- `--notify-apps-url`: only what was found under `--target` (`scope: apps`): CMS installs, plugins and lock files,
+  which on a hosting server belong to customers
+
+On a hosting server this keeps the two audiences apart: server patches go to the admins, site findings to support.
+Any combination of the three URLs can be set; each keeps track of what it was told on its own, so one webhook being
+down does not hold back or repeat messages on the others. `--notify-system-url` cannot be combined with
+`--skip-system`.
+
+```bash
+svetovit -t /home -c bounded -f quiet --state \
+  --notify-system-url "$ADMINS_SLACK_WEBHOOK" --notify-apps-url "$SUPPORT_DISCORD_WEBHOOK"
+```
 
 ### `--renotify <duration>`
 

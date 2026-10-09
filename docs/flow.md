@@ -39,7 +39,7 @@ flowchart TD
 
     V --> T{--state?}
     T -->|yes| W[state.Sync<br/>new / still open / fixed after 2 clean scans /<br/>removed when location is gone;<br/>unscanned locations untouched]
-    W --> X[--notify-url: post undelivered events<br/>+ --renotify reminders]
+    W --> X[--notify-url / -system-url / -apps-url:<br/>post what each channel was not told yet<br/>+ --renotify reminders]
     T -->|no, --notify-url| X
     W --> R[report.Print / WriteJSON<br/>per location optional<br/>+ changes since last scan]
     T -->|no| R

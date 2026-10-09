@@ -61,6 +61,10 @@ working directory.
                             full (everything) (default "small")
       --notify-url string   post findings to this webhook (env SVETOVIT_NOTIFY_URL): Slack, Discord, or generic JSON;
                             with --state only changes are posted
+      --notify-apps-url string
+                            like --notify-url, but only findings under --target (hosted sites), not OS packages
+      --notify-system-url string
+                            like --notify-url, but only the host's OS package findings, e.g. for the admins' channel
       --oA string           also write the report to <basename>.txt and <basename>.json
       --oJ string           also write a JSON report to this file
       --oN string           also write the normal-format report to this file
@@ -121,7 +125,9 @@ With `--state`, Svetovit keeps its findings in a SQLite database and the report 
 last run: new findings, fixed ones, removed ones (the site or plugin was deleted) and how long the rest have been
 open. A finding counts as fixed only after two consecutive scans of its location miss it, and a failed run never
 touches the database. `--notify-url` posts these changes to Slack, Discord or any JSON webhook, once each;
-`--renotify 7d` adds a weekly reminder about critical and high findings that are still open. See
+`--renotify 7d` adds a weekly reminder about critical and high findings that are still open. On a hosting server,
+`--notify-system-url` and `--notify-apps-url` send the server's own OS package findings and the hosted sites'
+findings to separate channels. See
 [docs/CLI.md](docs/CLI.md#tracking-and-notifications).
 
 ```bash

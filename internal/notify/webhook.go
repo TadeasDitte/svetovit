@@ -49,7 +49,7 @@ type genericPayload struct {
 	Events []state.Event `json:"events"`
 }
 
-func Send(ctx context.Context, client *http.Client, webhook, host string, events []state.Event) error {
+func Send(ctx context.Context, client *http.Client, webhook, title, host string, events []state.Event) error {
 	if len(events) == 0 {
 		return nil
 	}
@@ -58,11 +58,11 @@ func Send(ctx context.Context, client *http.Client, webhook, host string, events
 	var payload any
 	switch format {
 	case Slack:
-		payload = map[string]string{"text": Text(events, host, format, textLimit)}
+		payload = map[string]string{"text": Text(events, title, format, textLimit)}
 	case Discord:
-		payload = map[string]string{"content": Text(events, host, format, discordLimit)}
+		payload = map[string]string{"content": Text(events, title, format, discordLimit)}
 	default:
-		payload = genericPayload{Text: Text(events, host, format, textLimit), Host: host, Events: events}
+		payload = genericPayload{Text: Text(events, title, format, textLimit), Host: host, Events: events}
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -117,7 +117,7 @@ var sections = []section{
 	{state.Removed, "🗑️", "removed (location no longer exists)"},
 }
 
-func Text(events []state.Event, host string, format Format, limit int) string {
+func Text(events []state.Event, title string, format Format, limit int) string {
 	byKind := make(map[state.Kind][]state.Event)
 	for _, ev := range events {
 		byKind[ev.Kind] = append(byKind[ev.Kind], ev)
@@ -131,7 +131,7 @@ func Text(events []state.Event, host string, format Format, limit int) string {
 	}
 
 	var b strings.Builder
-	b.WriteString(bold("Svetovit scan on "+host) + "\n")
+	b.WriteString(bold(title) + "\n")
 	remaining := len(events)
 	for _, sec := range sections {
 		evs := byKind[sec.kind]
