@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.0](https://github.com/TadeasDitte/svetovit/compare/v1.5.0...v1.6.0) (2026-10-09)
+
+
+### Features
+
+* add scoped notifications for system and application findings, enhance webhook functionality ([8f5c740](https://github.com/TadeasDitte/svetovit/commit/8f5c7406adeff13af982e7ef3db771b4b2ab2ce1))
+
 ## [1.5.0](https://github.com/TadeasDitte/svetovit/compare/v1.4.0...v1.5.0) (2026-10-08)
 
 
