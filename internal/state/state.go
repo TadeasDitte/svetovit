@@ -51,14 +51,14 @@ CREATE TABLE IF NOT EXISTS deliveries (
 `
 
 type Finding struct {
-	Location   string   `json:"location"`
-	Component  string   `json:"component"`
-	Version    string   `json:"version"`
-	AdvisoryID string   `json:"advisory_id"`
-	Severity   string   `json:"severity"`
-	Score      *float64 `json:"score"` // nil when the advisory has no computed score
-	FixedIn    string   `json:"fixed_in,omitempty"`
-	Scope      string   `json:"scope"`
+	Location   string  `json:"location"`
+	Component  string  `json:"component"`
+	Version    string  `json:"version"`
+	AdvisoryID string  `json:"advisory_id"`
+	Severity   string  `json:"severity"`
+	Score      *float64 `json:"score"`
+	FixedIn    string  `json:"fixed_in,omitempty"`
+	Scope      string  `json:"scope"`
 }
 
 type Kind string
@@ -142,10 +142,7 @@ func Open(path string) (*Store, error) {
 	return &Store{db: db, path: path}, nil
 }
 
-// migrations[i] upgrades a database from user_version i to i+1. Add new steps at the end, never edit old ones.
 var migrations = []func(tx *sql.Tx) error{
-	// Composer and scoped npm components were stored with their vendor twice ("squizlabs/squizlabs/php_codesniffer").
-	// Rewrite them to the name collectFindings produces now, or every one would resolve as fixed and come back as new.
 	func(tx *sql.Tx) error {
 		for _, table := range []string{"findings", "deliveries"} {
 			if _, err := tx.Exec(`UPDATE OR IGNORE ` + table + ` SET component = substr(component, instr(component, '/') + 1)
@@ -153,7 +150,6 @@ var migrations = []func(tx *sql.Tx) error{
 				AND substr(component, instr(component, '/') + 1, instr(component, '/')) = substr(component, 1, instr(component, '/'))`); err != nil {
 				return err
 			}
-			// What is left in the old form collided with a row already under the new name.
 			if _, err := tx.Exec(`DELETE FROM ` + table + `
 				WHERE instr(component, '/') > 0
 				AND substr(component, instr(component, '/') + 1, instr(component, '/')) = substr(component, 1, instr(component, '/'))`); err != nil {
@@ -162,7 +158,6 @@ var migrations = []func(tx *sql.Tx) error{
 		}
 		return nil
 	},
-	// An unknown score used to be stored as 0. A scored finding is never 0.0, so those rows are unknowns.
 	func(tx *sql.Tx) error {
 		_, err := tx.Exec(`UPDATE findings SET score = NULL WHERE score = 0`)
 		return err
@@ -188,7 +183,6 @@ func migrate(db *sql.DB) error {
 			return err
 		}
 	}
-	// PRAGMA takes no bound parameters.
 	if _, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, len(migrations))); err != nil {
 		return err
 	}
