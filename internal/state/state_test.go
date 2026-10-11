@@ -1,10 +1,14 @@
 package state
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/TadeasDitte/Svetovit/internal/rozhanitsy"
 )
 
 func openTemp(t *testing.T) *Store {
@@ -18,7 +22,7 @@ func openTemp(t *testing.T) *Store {
 }
 
 func finding(loc, cve, severity string) Finding {
-	return Finding{Location: loc, Component: "plugin", Version: "1.0", AdvisoryID: cve, Severity: severity, Score: 9, Scope: Apps}
+	return Finding{Location: loc, Component: "plugin", Version: "1.0", AdvisoryID: cve, Severity: severity, Score: new(9.0), Scope: Apps}
 }
 
 func doSync(t *testing.T, s *Store, run Run) *Changes {
@@ -117,7 +121,7 @@ func TestOutOfScopeFindingsAreNotResolved(t *testing.T) {
 	sc := scanned("/www/a")
 	doSync(t, s, Run{Now: day0, Findings: []Finding{finding("/www/a", "CVE-1", "MEDIUM")}, Scanned: sc})
 
-	onlyCritical := func(severity string, _ float64) bool { return severity == "CRITICAL" }
+	onlyCritical := func(severity string, _ *float64) bool { return severity == "CRITICAL" }
 	for i := 0; i < 3; i++ {
 		if c := doSync(t, s, Run{Now: day0, Scanned: sc, InScope: onlyCritical}); len(c.Fixed) != 0 {
 			t.Fatalf("filtered-out finding resolved: %+v", c)
@@ -285,5 +289,103 @@ func TestNewChannelGetsBaseline(t *testing.T) {
 	doSync(t, s, Run{Now: day0, Findings: []Finding{finding("/www/a", "CVE-1", "HIGH"), finding("/www/a", "CVE-2", "HIGH")}, Scanned: scanned("/www/a")})
 	if ev, _ = s.Pending("all", "", day0.AddDate(0, 0, 31), 0); len(ev) != 1 || ev[0].Kind != New || ev[0].AdvisoryID != "CVE-2" {
 		t.Fatalf("want one new after baseline, got %+v", ev)
+	}
+}
+
+func TestOpenRewritesDoubledVendorNames(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []string{
+		"squizlabs/squizlabs/php_codesniffer", "@babel/@babel/core", "acme/tool", "plain",
+		"phpunit/phpunit/phpunit", "phpunit/phpunit",
+	} {
+		if _, err := s.db.Exec(`INSERT INTO findings (location, component, version, advisory_id, scope, first_seen, last_seen) VALUES ('/a', ?, '1', 'CVE-1', 'apps', 1, 1)`, c); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.db.Exec(`INSERT INTO deliveries (channel, location, component, version, advisory_id, notified_at) VALUES ('all', '/a', ?, '1', 'CVE-1', 1)`, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.db.Exec(`PRAGMA user_version = 0`); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	for range 2 {
+		s, err = Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, table := range []string{"findings", "deliveries"} {
+			rows, err := s.db.Query(`SELECT component FROM ` + table + ` ORDER BY component`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for rows.Next() {
+				var c string
+				rows.Scan(&c)
+				got = append(got, c)
+			}
+			rows.Close()
+			want := []string{"@babel/core", "acme/tool", "phpunit/phpunit", "plain", "squizlabs/php_codesniffer"}
+			if strings.Join(got, ",") != strings.Join(want, ",") {
+				t.Errorf("%s: got %v, want %v", table, got, want)
+			}
+		}
+		s.Close()
+	}
+}
+
+func TestUnknownScoreIsStoredAsNull(t *testing.T) {
+	s := openTemp(t)
+	f := finding("/www/a", "GHSA-1", "HIGH")
+	f.Score = nil
+
+	doSync(t, s, Run{Now: day0, Findings: []Finding{f}, Scanned: scanned("/www/a")})
+	ev, err := s.Pending("all", "", day0, 0)
+	if err != nil || len(ev) != 1 || ev[0].Score != nil {
+		t.Fatalf("pending: %+v, %v", ev, err)
+	}
+
+	inScope := func(severity string, score *float64) bool { return rozhanitsy.MeetsMinScore(score, severity, 7) }
+	for i := 1; i <= CleanRunsToResolve; i++ {
+		c := doSync(t, s, Run{Now: day0.AddDate(0, 0, i), Scanned: scanned("/www/a"), InScope: inScope})
+		if i == CleanRunsToResolve && len(c.Fixed) != 1 {
+			t.Fatalf("run %d: %+v", i, c)
+		}
+	}
+}
+
+func TestOpenTurnsStoredZeroScoresIntoNull(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, score := range []float64{0, 7.5} {
+		if _, err := s.db.Exec(`INSERT INTO findings (location, component, version, advisory_id, score, scope, first_seen, last_seen) VALUES ('/a', 'c', '1', ?, ?, 'apps', 1, 1)`, fmt.Sprint(score), score); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.db.Exec(`PRAGMA user_version = 1`); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	s, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var nulls, scored int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FILTER (WHERE score IS NULL), COUNT(*) FILTER (WHERE score = 7.5) FROM findings`).Scan(&nulls, &scored); err != nil {
+		t.Fatal(err)
+	}
+	if nulls != 1 || scored != 1 {
+		t.Errorf("got %d null and %d scored rows, want 1 and 1", nulls, scored)
 	}
 }

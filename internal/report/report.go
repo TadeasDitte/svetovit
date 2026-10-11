@@ -49,7 +49,7 @@ func (f Filter) Apply(vulns []rozhanitsy.Vulnerability) []rozhanitsy.Vulnerabili
 	return out
 }
 
-func (f Filter) Matches(severity string, score float64) bool {
+func (f Filter) Matches(severity string, score *float64) bool {
 	allowed := make(map[string]bool, len(f.Severities))
 	for _, s := range f.Severities {
 		allowed[strings.ToUpper(strings.TrimSpace(s))] = true
@@ -57,8 +57,8 @@ func (f Filter) Matches(severity string, score float64) bool {
 	return f.matches(allowed, severity, score)
 }
 
-func (f Filter) matches(allowed map[string]bool, severity string, score float64) bool {
-	return score >= f.MinScore && (len(allowed) == 0 || allowed[strings.ToUpper(severity)])
+func (f Filter) matches(allowed map[string]bool, severity string, score *float64) bool {
+	return rozhanitsy.MeetsMinScore(score, severity, f.MinScore) && (len(allowed) == 0 || allowed[strings.ToUpper(severity)])
 }
 
 type System struct {
@@ -152,7 +152,7 @@ func printVulnerable(w io.Writer, vulnerable []rozhanitsy.Vulnerability, omitLoc
 		if vulns[i].CVSSSeverity != vulns[j].CVSSSeverity {
 			return severityRank[vulns[i].CVSSSeverity] > severityRank[vulns[j].CVSSSeverity]
 		}
-		return vulns[i].CVSSScore > vulns[j].CVSSScore
+		return scoreGreater(vulns[i].CVSSScore, vulns[j].CVSSScore)
 	})
 
 	fmt.Fprintf(w, "%d known vulnerabilit%s found:\n\n", len(vulns), plural(len(vulns)))
@@ -161,14 +161,14 @@ func printVulnerable(w io.Writer, vulnerable []rozhanitsy.Vulnerability, omitLoc
 	if omitLocation {
 		fmt.Fprintln(tw, "SEVERITY\tCVSS\tPRODUCT\tVERSION\tCVE")
 		for _, v := range vulns {
-			fmt.Fprintf(tw, "%s\t%.1f\t%s\t%s\t%s\n",
-				v.CVSSSeverity, v.CVSSScore, productName(v), v.InstalledVersion, v.CVEID)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
+				v.CVSSSeverity, formatScore(v.CVSSScore), v.Name(), v.InstalledVersion, v.CVEID)
 		}
 	} else {
 		fmt.Fprintln(tw, "SEVERITY\tCVSS\tPRODUCT\tVERSION\tCVE\tLOCATION(S)")
 		for _, v := range vulns {
-			fmt.Fprintf(tw, "%s\t%.1f\t%s\t%s\t%s\t%s\n",
-				v.CVSSSeverity, v.CVSSScore, productName(v), v.InstalledVersion, v.CVEID, v.LocalID)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+				v.CVSSSeverity, formatScore(v.CVSSScore), v.Name(), v.InstalledVersion, v.CVEID, v.LocalID)
 		}
 	}
 	tw.Flush()
@@ -183,10 +183,7 @@ func printUnmatched(w io.Writer, unmatched []rozhanitsy.UnmatchedComponent) {
 	fmt.Fprintf(w, "%d component%s could not be matched against the vulnerability database:\n",
 		len(unmatched), suffix(len(unmatched)))
 	for _, u := range unmatched {
-		name := u.Product
-		if u.Vendor != "" {
-			name = u.Vendor + "/" + u.Product
-		}
+		name := rozhanitsy.QualifiedName(u.Vendor, u.Product)
 		note := ""
 		if u.Ambiguous {
 			note = " [ambiguous name, several vendors]"
@@ -256,6 +253,23 @@ func filterSections(resp *rozhanitsy.CheckResponse, sections Sections, byLocatio
 	return out
 }
 
+func formatScore(score *float64) string {
+	if score == nil {
+		return "n/a"
+	}
+	return fmt.Sprintf("%.1f", *score)
+}
+
+func scoreGreater(a, b *float64) bool {
+	switch {
+	case a == nil:
+		return false
+	case b == nil:
+		return true
+	}
+	return *a > *b
+}
+
 func plural(n int) string {
 	if n == 1 {
 		return "y"
@@ -268,13 +282,6 @@ func suffix(n int) string {
 		return ""
 	}
 	return "s"
-}
-
-func productName(v rozhanitsy.Vulnerability) string {
-	if v.Vendor == "" || v.Vendor == v.Product {
-		return v.Product
-	}
-	return v.Vendor + "/" + v.Product
 }
 
 func printChanges(w io.Writer, changes *state.Changes, now time.Time) {
@@ -298,15 +305,15 @@ func printChanges(w io.Writer, changes *state.Changes, now time.Time) {
 			if events[i].Severity != events[j].Severity {
 				return severityRank[events[i].Severity] > severityRank[events[j].Severity]
 			}
-			return events[i].Score > events[j].Score
+			return scoreGreater(events[i].Score, events[j].Score)
 		})
 
 		fmt.Fprintf(w, "\n%s:\n\n", list.title)
 		tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
 		fmt.Fprintln(tw, "SEVERITY\tCVSS\tPRODUCT\tVERSION\tCVE\tOPEN FOR\tLOCATION")
 		for _, ev := range events {
-			fmt.Fprintf(tw, "%s\t%.1f\t%s\t%s\t%s\t%dd\t%s\n",
-				ev.Severity, ev.Score, ev.Component, ev.Version, ev.AdvisoryID, ev.DaysOpen, ev.Location)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%dd\t%s\n",
+				ev.Severity, formatScore(ev.Score), ev.Component, ev.Version, ev.AdvisoryID, ev.DaysOpen, ev.Location)
 		}
 		tw.Flush()
 	}

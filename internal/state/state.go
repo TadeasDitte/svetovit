@@ -51,14 +51,14 @@ CREATE TABLE IF NOT EXISTS deliveries (
 `
 
 type Finding struct {
-	Location   string  `json:"location"`
-	Component  string  `json:"component"`
-	Version    string  `json:"version"`
-	AdvisoryID string  `json:"advisory_id"`
-	Severity   string  `json:"severity"`
-	Score      float64 `json:"score"`
-	FixedIn    string  `json:"fixed_in,omitempty"`
-	Scope      string  `json:"scope"`
+	Location   string   `json:"location"`
+	Component  string   `json:"component"`
+	Version    string   `json:"version"`
+	AdvisoryID string   `json:"advisory_id"`
+	Severity   string   `json:"severity"`
+	Score      *float64 `json:"score"` // nil when the advisory has no computed score
+	FixedIn    string   `json:"fixed_in,omitempty"`
+	Scope      string   `json:"scope"`
 }
 
 type Kind string
@@ -96,7 +96,7 @@ type Run struct {
 	Findings   []Finding
 	Scanned    map[string]bool
 	TargetRoot string
-	InScope    func(severity string, score float64) bool
+	InScope    func(severity string, score *float64) bool
 }
 
 type Store struct {
@@ -135,7 +135,64 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, notWritable(path, err)
 	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("state database %s: migrating: %w", path, err)
+	}
 	return &Store{db: db, path: path}, nil
+}
+
+// migrations[i] upgrades a database from user_version i to i+1. Add new steps at the end, never edit old ones.
+var migrations = []func(tx *sql.Tx) error{
+	// Composer and scoped npm components were stored with their vendor twice ("squizlabs/squizlabs/php_codesniffer").
+	// Rewrite them to the name collectFindings produces now, or every one would resolve as fixed and come back as new.
+	func(tx *sql.Tx) error {
+		for _, table := range []string{"findings", "deliveries"} {
+			if _, err := tx.Exec(`UPDATE OR IGNORE ` + table + ` SET component = substr(component, instr(component, '/') + 1)
+				WHERE instr(component, '/') > 0
+				AND substr(component, instr(component, '/') + 1, instr(component, '/')) = substr(component, 1, instr(component, '/'))`); err != nil {
+				return err
+			}
+			// What is left in the old form collided with a row already under the new name.
+			if _, err := tx.Exec(`DELETE FROM ` + table + `
+				WHERE instr(component, '/') > 0
+				AND substr(component, instr(component, '/') + 1, instr(component, '/')) = substr(component, 1, instr(component, '/'))`); err != nil {
+				return err
+			}
+		}
+		return nil
+	},
+	// An unknown score used to be stored as 0. A scored finding is never 0.0, so those rows are unknowns.
+	func(tx *sql.Tx) error {
+		_, err := tx.Exec(`UPDATE findings SET score = NULL WHERE score = 0`)
+		return err
+	},
+}
+
+func migrate(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var version int
+	if err := tx.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		return err
+	}
+	if version >= len(migrations) {
+		return nil
+	}
+	for _, step := range migrations[version:] {
+		if err := step(tx); err != nil {
+			return err
+		}
+	}
+	// PRAGMA takes no bound parameters.
+	if _, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, len(migrations))); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func notWritable(path string, err error) error {
@@ -266,7 +323,7 @@ type stored struct {
 	resolution string
 }
 
-const storedColumns = `f.location, f.component, f.version, f.advisory_id, COALESCE(f.severity, ''), COALESCE(f.score, 0),
+const storedColumns = `f.location, f.component, f.version, f.advisory_id, COALESCE(f.severity, ''), f.score,
 	COALESCE(f.fixed_in, ''), f.scope, f.first_seen, f.clean_runs, COALESCE(f.resolution, '')`
 
 func query(q interface {

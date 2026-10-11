@@ -346,13 +346,9 @@ func collectFindings(resp *rozhanitsy.CheckResponse, sys *report.System) []state
 	add := func(r *rozhanitsy.CheckResponse, scope string) {
 		for loc, entry := range r.ByLocation {
 			for _, v := range entry.Vulnerable {
-				component := v.Product
-				if v.Vendor != "" && v.Vendor != v.Product {
-					component = v.Vendor + "/" + v.Product
-				}
 				findings = append(findings, state.Finding{
 					Location:   loc,
-					Component:  component,
+					Component:  v.Name(),
 					Version:    v.InstalledVersion,
 					AdvisoryID: v.CVEID,
 					Severity:   v.CVSSSeverity,

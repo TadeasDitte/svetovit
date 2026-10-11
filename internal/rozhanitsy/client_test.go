@@ -35,9 +35,9 @@ func TestCheckVulnsBatchesRetriesAndMapsLocations(t *testing.T) {
 			res := checkResult{Product: p.Product, Version: p.Version}
 			switch p.Product {
 			case "vuln":
-				res.Vulnerabilities = []apiVulnerability{{ID: "CVE-1", CVSSScore: 9.8, Severity: "CRITICAL", Confidence: "high"}}
+				res.Vulnerabilities = []apiVulnerability{{ID: "CVE-1", CVSSScore: new(9.8), Severity: "CRITICAL", Confidence: "high"}}
 			case "maybe":
-				res.Vulnerabilities = []apiVulnerability{{ID: "CVE-2", CVSSScore: 5, Severity: "MEDIUM", Confidence: "low"}}
+				res.Vulnerabilities = []apiVulnerability{{ID: "CVE-2", CVSSScore: new(5.0), Severity: "MEDIUM", Confidence: "low"}}
 			}
 			out.Data = append(out.Data, res)
 		}
@@ -75,8 +75,8 @@ func TestCheckVulnsBatchesRetriesAndMapsLocations(t *testing.T) {
 func TestCheckVulnsFiltersByScoreAndSeverity(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(batchResponse{Data: []checkResult{{Vulnerabilities: []apiVulnerability{
-			{ID: "CVE-LOW", CVSSScore: 3, Severity: "LOW", Confidence: "high"},
-			{ID: "CVE-HIGH", CVSSScore: 8, Severity: "HIGH", Confidence: "high"},
+			{ID: "CVE-LOW", CVSSScore: new(3.0), Severity: "LOW", Confidence: "high"},
+			{ID: "CVE-HIGH", CVSSScore: new(8.0), Severity: "HIGH", Confidence: "high"},
 		}}}})
 	}))
 	defer srv.Close()
@@ -93,8 +93,8 @@ func TestCheckVulnsFiltersByScoreAndSeverity(t *testing.T) {
 func TestNVDOnlyDropsOSVAdvisories(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(batchResponse{Data: []checkResult{{Vulnerabilities: []apiVulnerability{
-			{ID: "DEBIAN-CVE-1", Source: "osv", CVSSScore: 9, Severity: "Critical", Confidence: "high"},
-			{ID: "CVE-1", Source: "nvd", CVSSScore: 9, Severity: "Critical", Confidence: "high"},
+			{ID: "DEBIAN-CVE-1", Source: "osv", CVSSScore: new(9.0), Severity: "Critical", Confidence: "high"},
+			{ID: "CVE-1", Source: "nvd", CVSSScore: new(9.0), Severity: "Critical", Confidence: "high"},
 		}}}})
 	}))
 	defer srv.Close()
@@ -161,11 +161,11 @@ func TestCheckVulnsResolvesAmbiguousCandidates(t *testing.T) {
 				res.Ambiguous = true
 				res.Candidates = []candidate{{Vendor: "automattic"}, {Vendor: "other"}}
 			case "automattic":
-				v := apiVulnerability{ID: "CVE-1", CVSSScore: 6, Severity: "MEDIUM", Confidence: "high"}
+				v := apiVulnerability{ID: "CVE-1", CVSSScore: new(6.0), Severity: "MEDIUM", Confidence: "high"}
 				v.AffectedRange.PlugsInto = "wordpress"
 				res.Vulnerabilities = []apiVulnerability{v}
 			case "other":
-				res.Vulnerabilities = []apiVulnerability{{ID: "CVE-2", CVSSScore: 9, Severity: "CRITICAL", Confidence: "high"}, {ID: "CVE-3", Confidence: "low"}}
+				res.Vulnerabilities = []apiVulnerability{{ID: "CVE-2", CVSSScore: new(9.0), Severity: "CRITICAL", Confidence: "high"}, {ID: "CVE-3", Confidence: "low"}}
 			}
 			out.Data = append(out.Data, res)
 		}
@@ -230,5 +230,75 @@ func TestRetriesServerErrorsButNotClientErrors(t *testing.T) {
 	}
 	if calls.Load() != 1 {
 		t.Errorf("422 must not be retried, got %d calls", calls.Load())
+	}
+}
+
+func TestQualifiedName(t *testing.T) {
+	tests := []struct{ vendor, product, want string }{
+		{"", "curl", "curl"},
+		{"haxx", "curl", "haxx/curl"},
+		{"same", "same", "same"},
+		{"squizlabs", "squizlabs/php_codesniffer", "squizlabs/php_codesniffer"},
+		{"@babel", "@babel/core", "@babel/core"},
+		{"acme", "acme-tools", "acme/acme-tools"},
+	}
+	for _, tt := range tests {
+		if got := QualifiedName(tt.vendor, tt.product); got != tt.want {
+			t.Errorf("QualifiedName(%q, %q) = %q, want %q", tt.vendor, tt.product, got, tt.want)
+		}
+	}
+}
+
+func TestMeetsMinScore(t *testing.T) {
+	tests := []struct {
+		name     string
+		score    *float64
+		severity string
+		min      float64
+		want     bool
+	}{
+		{"no threshold", nil, "LOW", 0, true},
+		{"known above", new(7.5), "HIGH", 7, true},
+		{"known below", new(6.9), "MEDIUM", 7, false},
+		{"known score beats severity", new(3.0), "CRITICAL", 7, false},
+		{"unknown critical", nil, "CRITICAL", 7, true},
+		{"unknown high at 7", nil, "HIGH", 7, true},
+		{"unknown high, case-insensitive", nil, "high", 7, true},
+		{"unknown medium", nil, "MEDIUM", 7, false},
+		{"unknown low", nil, "LOW", 4, false},
+		{"unknown high above its band floor", nil, "HIGH", 8, false},
+		{"unknown critical at 9", nil, "CRITICAL", 9, true},
+		{"nothing to judge by is kept", nil, "", 9, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := MeetsMinScore(tt.score, tt.severity, tt.min); got != tt.want {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCheckVulnsKeepsUnknownScoresForMinScore(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"data":[{"product":"pkg","version":"1","vulnerabilities":[
+			{"id":"GHSA-high","cvss_score":null,"severity":"HIGH","confidence":"high"},
+			{"id":"GHSA-crit","cvss_score":null,"severity":"CRITICAL","confidence":"high"},
+			{"id":"GHSA-med","cvss_score":null,"severity":"MEDIUM","confidence":"high"},
+			{"id":"CVE-scored","cvss_score":7.8,"severity":"HIGH","confidence":"high"},
+			{"id":"CVE-low","cvss_score":2.1,"severity":"LOW","confidence":"high"}]}]}`)
+	}))
+	defer srv.Close()
+
+	resp, err := New(srv.URL, "").CheckVulns(context.Background(), []Component{{Product: "pkg", Version: "1", LocalID: "/a"}}, 7, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]*float64{}
+	for _, v := range resp.Vulnerable {
+		got[v.CVEID] = v.CVSSScore
+	}
+	if len(got) != 3 || got["GHSA-high"] != nil || got["GHSA-crit"] != nil || got["CVE-scored"] == nil || *got["CVE-scored"] != 7.8 {
+		t.Errorf("unexpected vulnerable set: %+v", got)
 	}
 }

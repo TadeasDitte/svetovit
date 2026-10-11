@@ -15,10 +15,10 @@ var checkedAt = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 
 func sampleVulns() []rozhanitsy.Vulnerability {
 	return []rozhanitsy.Vulnerability{
-		{Product: "low", CVEID: "CVE-LOW", CVSSScore: 2.0, CVSSSeverity: "LOW", InstalledVersion: "1"},
-		{Vendor: "acme", Product: "crit", CVEID: "CVE-CRIT", CVSSScore: 9.8, CVSSSeverity: "CRITICAL", InstalledVersion: "2", LocalID: "/a"},
-		{Product: "high-b", CVEID: "CVE-HB", CVSSScore: 7.5, CVSSSeverity: "HIGH", InstalledVersion: "3"},
-		{Vendor: "same", Product: "same", CVEID: "CVE-HA", CVSSScore: 8.1, CVSSSeverity: "HIGH", InstalledVersion: "4"},
+		{Product: "low", CVEID: "CVE-LOW", CVSSScore: new(2.0), CVSSSeverity: "LOW", InstalledVersion: "1"},
+		{Vendor: "acme", Product: "crit", CVEID: "CVE-CRIT", CVSSScore: new(9.8), CVSSSeverity: "CRITICAL", InstalledVersion: "2", LocalID: "/a"},
+		{Product: "high-b", CVEID: "CVE-HB", CVSSScore: new(7.5), CVSSSeverity: "HIGH", InstalledVersion: "3"},
+		{Vendor: "same", Product: "same", CVEID: "CVE-HA", CVSSScore: new(8.1), CVSSSeverity: "HIGH", InstalledVersion: "4"},
 	}
 }
 
@@ -287,7 +287,7 @@ func TestWriteJSONByLocationAndSystem(t *testing.T) {
 func TestPrintChanges(t *testing.T) {
 	changes := &state.Changes{
 		New:        []state.Event{{Kind: state.New}},
-		Fixed:      []state.Event{{Kind: state.Fixed, DaysOpen: 12, Finding: state.Finding{Location: "/www/shop", Component: "woocommerce", Version: "8.1.0", AdvisoryID: "CVE-FIXED", Severity: "HIGH", Score: 7.5}}},
+		Fixed:      []state.Event{{Kind: state.Fixed, DaysOpen: 12, Finding: state.Finding{Location: "/www/shop", Component: "woocommerce", Version: "8.1.0", AdvisoryID: "CVE-FIXED", Severity: "HIGH", Score: new(7.5)}}},
 		Open:       3,
 		OldestOpen: checkedAt.AddDate(0, 0, -34),
 	}
@@ -315,5 +315,38 @@ func TestPrintChanges(t *testing.T) {
 	}
 	if got.Changes.Open != 3 || len(got.Changes.Fixed) != 1 || got.Changes.Fixed[0]["advisory_id"] != "CVE-FIXED" {
 		t.Fatalf("changes JSON: %s", buf.String())
+	}
+}
+
+func TestUnknownScores(t *testing.T) {
+	vulns := []rozhanitsy.Vulnerability{
+		{Vendor: "squizlabs", Product: "squizlabs/php_codesniffer", CVEID: "GHSA-nil-high", CVSSSeverity: "HIGH", InstalledVersion: "2.9.2"},
+		{Product: "scored", CVEID: "CVE-HIGH", CVSSScore: new(7.5), CVSSSeverity: "HIGH", InstalledVersion: "1"},
+		{Product: "unrated", CVEID: "GHSA-nil-med", CVSSSeverity: "MEDIUM", InstalledVersion: "1"},
+	}
+
+	if got := (Filter{MinScore: 7}).Apply(vulns); len(got) != 2 {
+		t.Errorf("-m 7 should keep the unscored HIGH and the scored one, got %+v", got)
+	}
+
+	var buf bytes.Buffer
+	Print(&buf, &rozhanitsy.CheckResponse{CheckedAt: checkedAt, Vulnerable: vulns}, nil, nil, Sections{Bounded: true}, false)
+	out := buf.String()
+	if !strings.Contains(out, "n/a") || strings.Contains(out, "0.0") {
+		t.Errorf("unknown score should print as n/a:\n%s", out)
+	}
+	if !strings.Contains(out, "squizlabs/php_codesniffer") || strings.Contains(out, "squizlabs/squizlabs") {
+		t.Errorf("Composer package should be named once:\n%s", out)
+	}
+	if hi, nilHigh := strings.Index(out, "CVE-HIGH"), strings.Index(out, "GHSA-nil-high"); hi < 0 || nilHigh < hi {
+		t.Errorf("within a severity, unknown scores sort last:\n%s", out)
+	}
+
+	buf.Reset()
+	if err := WriteJSON(&buf, &rozhanitsy.CheckResponse{CheckedAt: checkedAt, Vulnerable: vulns}, nil, nil, Sections{Bounded: true}, false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), `"cvss_score": null`) {
+		t.Errorf("unknown score should be null in JSON:\n%s", buf.String())
 	}
 }

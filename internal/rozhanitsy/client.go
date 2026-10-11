@@ -62,12 +62,12 @@ type batchRequest struct {
 }
 
 type apiVulnerability struct {
-	ID         string  `json:"id"`
-	Source     string  `json:"source"`
-	CVSSScore  float64 `json:"cvss_score"`
-	Severity   string  `json:"severity"`
-	Confidence string  `json:"confidence"`
-	FixedIn    string  `json:"fixed_in"`
+	ID         string   `json:"id"`
+	Source     string   `json:"source"`
+	CVSSScore  *float64 `json:"cvss_score"`
+	Severity   string   `json:"severity"`
+	Confidence string   `json:"confidence"`
+	FixedIn    string   `json:"fixed_in"`
 
 	AffectedRange struct {
 		Vendor    string `json:"vendor"`
@@ -94,15 +94,34 @@ type batchResponse struct {
 }
 
 type Vulnerability struct {
-	Vendor           string  `json:"vendor"`
-	Product          string  `json:"product"`
-	LocalID          string  `json:"local_id,omitempty"`
-	InstalledVersion string  `json:"installed_version"`
-	CVEID            string  `json:"cve_id"`
-	CVSSScore        float64 `json:"cvss_score"`
-	CVSSSeverity     string  `json:"cvss_severity"`
-	FixedIn          string  `json:"fixed_in,omitempty"`
+	Vendor           string   `json:"vendor"`
+	Product          string   `json:"product"`
+	LocalID          string   `json:"local_id,omitempty"`
+	InstalledVersion string   `json:"installed_version"`
+	CVEID            string   `json:"cve_id"`
+	CVSSScore        *float64 `json:"cvss_score"` // nil when unknown
+	CVSSSeverity     string   `json:"cvss_severity"`
+	FixedIn          string   `json:"fixed_in,omitempty"`
 }
+
+func QualifiedName(vendor, product string) string {
+	if vendor == "" || vendor == product || strings.HasPrefix(product, vendor+"/") {
+		return product
+	}
+	return vendor + "/" + product
+}
+
+var severityFloor = map[string]float64{"CRITICAL": 9, "HIGH": 7, "MEDIUM": 4, "LOW": 0.1}
+
+func MeetsMinScore(score *float64, severity string, minScore float64) bool {
+	if score != nil {
+		return *score >= minScore
+	}
+	floor, ok := severityFloor[strings.ToUpper(severity)]
+	return !ok || floor >= minScore
+}
+
+func (v Vulnerability) Name() string { return QualifiedName(v.Vendor, v.Product) }
 
 type UnmatchedComponent struct {
 	Vendor           string `json:"vendor"`
@@ -152,8 +171,8 @@ func (e *APIError) Error() string {
 
 type Client struct {
 	BaseURL string
-	Token string
-	HTTP  *http.Client
+	Token   string
+	HTTP    *http.Client
 
 	RetryBackoff time.Duration
 }
@@ -235,7 +254,7 @@ func (c *Client) CheckVulns(ctx context.Context, components []Component, minScor
 					continue
 				}
 				hasHigh = true
-				if v.CVSSScore < minScore || (len(allowed) > 0 && !allowed[strings.ToUpper(v.Severity)]) {
+				if !MeetsMinScore(v.CVSSScore, v.Severity, minScore) || (len(allowed) > 0 && !allowed[strings.ToUpper(v.Severity)]) {
 					continue
 				}
 				vendor := comp.Vendor

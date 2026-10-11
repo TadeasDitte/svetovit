@@ -127,6 +127,10 @@ Use `bounded` for alerting, where every line should need action; `all` for audit
 
 Only report vulnerabilities with a CVSS score of at least this value, e.g. `-m 7` for high and critical.
 
+Some advisories (many GHSA entries, for example) have no CVSS score. They show `n/a` as their score (`null` in JSON)
+and are judged by the lower bound of their severity band instead: critical 9.0, high 7.0, medium 4.0, low 0.1. So
+`-m 7` keeps an unscored high or critical and drops an unscored medium or low.
+
 ### `-s, --severity <list>`
 
 Comma-separated CVSS severities to report: `critical`, `high`, `medium`, `low`. Use either this or `--min-score`,

@@ -5,11 +5,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/TadeasDitte/Svetovit/internal/report"
+	"github.com/TadeasDitte/Svetovit/internal/rozhanitsy"
 )
 
 func TestParseSections(t *testing.T) {
@@ -83,5 +85,22 @@ func TestParseDays(t *testing.T) {
 func TestSystemWebhookNeedsSystemPackages(t *testing.T) {
 	if code := run([]string{"-S", "http://127.0.0.1:1", "--skip-system", "--notify-system-url", "http://127.0.0.1:1/hook"}); code != 2 {
 		t.Fatalf("exit code %d, want 2", code)
+	}
+}
+
+func TestCollectFindingsNamesComposerPackagesOnce(t *testing.T) {
+	resp := &rozhanitsy.CheckResponse{ByLocation: map[string]*rozhanitsy.LocationReport{
+		"/www/composer.lock": {Vulnerable: []rozhanitsy.Vulnerability{
+			{Vendor: "squizlabs", Product: "squizlabs/php_codesniffer", InstalledVersion: "2.9.2", CVEID: "GHSA-hmqg-cxww-wqhq"},
+			{Vendor: "haxx", Product: "curl", InstalledVersion: "8.0", CVEID: "CVE-1"},
+		}},
+	}}
+	var got []string
+	for _, f := range collectFindings(resp, nil) {
+		got = append(got, f.Component)
+	}
+	sort.Strings(got)
+	if want := "haxx/curl,squizlabs/php_codesniffer"; strings.Join(got, ",") != want {
+		t.Errorf("got %v, want %s", got, want)
 	}
 }

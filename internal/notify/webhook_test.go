@@ -32,7 +32,7 @@ func TestFormatFor(t *testing.T) {
 
 func event(kind state.Kind, cve, severity string, score float64) state.Event {
 	return state.Event{Kind: kind, DaysOpen: 12, Finding: state.Finding{
-		Location: "/var/www/shop", Component: "woocommerce", Version: "8.1.0", AdvisoryID: cve, Severity: severity, Score: score, FixedIn: "8.1.2", Scope: state.Apps,
+		Location: "/var/www/shop", Component: "woocommerce", Version: "8.1.0", AdvisoryID: cve, Severity: severity, Score: &score, FixedIn: "8.1.2", Scope: state.Apps,
 	}}
 }
 
