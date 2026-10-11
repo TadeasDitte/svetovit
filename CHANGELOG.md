@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.7.0](https://github.com/TadeasDitte/svetovit/compare/v1.6.0...v1.7.0) (2026-10-11)
+
+
+### Features
+
+* enhance webhook notifications with scan summaries and severity counts ([fca7fdb](https://github.com/TadeasDitte/svetovit/commit/fca7fdb2e1576b0386852522d5ea23bc02b994ad))
+* refactor vulnerability scoring to use pointers and update related tests ([d010eaf](https://github.com/TadeasDitte/svetovit/commit/d010eaf47b219f6faddb4ee66d9981b942463b90))
+* refactor vulnerability scoring to use pointers and update related tests ([c5afd67](https://github.com/TadeasDitte/svetovit/commit/c5afd67332e210caad697c97175e9c32b0d21e3b))
+
 ## [1.6.0](https://github.com/TadeasDitte/svetovit/compare/v1.5.0...v1.6.0) (2026-10-09)
 
 
