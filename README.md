@@ -59,8 +59,9 @@ working directory.
       --mode string         how much of an install to search: small (plugins and their lock files only), half
                             (everything inside installs, including nested installs, except upload/cache dirs),
                             full (everything) (default "small")
-      --notify-url string   post findings to this webhook (env SVETOVIT_NOTIFY_URL): Slack, Discord, or generic JSON;
-                            with --state only changes are posted
+      --notify-url string   post a scan summary (host, severity counts, duration, params) to this webhook (env
+                            SVETOVIT_NOTIFY_URL): Slack, Discord, or generic JSON; with --state only posted when
+                            something changed
       --notify-apps-url string
                             like --notify-url, but only findings under --target (hosted sites), not OS packages
       --notify-system-url string
@@ -124,9 +125,10 @@ from Ansible or cron on many hosts:
 With `--state`, Svetovit keeps its findings in a SQLite database and the report ends with what changed since the
 last run: new findings, fixed ones, removed ones (the site or plugin was deleted) and how long the rest have been
 open. A finding counts as fixed only after two consecutive scans of its location miss it, and a failed run never
-touches the database. `--notify-url` posts these changes to Slack, Discord or any JSON webhook, once each;
+touches the database. `--notify-url` posts a short summary (host, counts per severity, scan duration, scan
+parameters) to Slack, Discord or any JSON webhook whenever something changed;
 `--renotify 7d` adds a weekly reminder about critical and high findings that are still open. On a hosting server,
-`--notify-system-url` and `--notify-apps-url` send the server's own OS package findings and the hosted sites'
+`--notify-system-url` and `--notify-apps-url` send summaries of the server's own OS package findings and the hosted sites'
 findings to separate channels. See
 [docs/CLI.md](docs/CLI.md#tracking-and-notifications).
 

@@ -58,7 +58,7 @@ func run(args []string) int {
 
 	statePath := fs.String("state", os.Getenv("SVETOVIT_STATE"), "keep findings in a SQLite database at this path (env SVETOVIT_STATE) to report what is new, fixed or still open; --state alone uses "+state.DefaultPath())
 	fs.Lookup("state").NoOptDefVal = "default"
-	notifyURL := fs.String("notify-url", os.Getenv("SVETOVIT_NOTIFY_URL"), "post findings to this webhook (env SVETOVIT_NOTIFY_URL): Slack, Discord, or generic JSON; with --state only changes are posted")
+	notifyURL := fs.String("notify-url", os.Getenv("SVETOVIT_NOTIFY_URL"), "post a scan summary (host, severity counts, duration, params) to this webhook (env SVETOVIT_NOTIFY_URL): Slack, Discord, or generic JSON; with --state only posted when something changed")
 	notifySystemURL := fs.String("notify-system-url", os.Getenv("SVETOVIT_NOTIFY_SYSTEM_URL"), "like --notify-url, but only the host's OS package findings, e.g. for the admins' channel (env SVETOVIT_NOTIFY_SYSTEM_URL)")
 	notifyAppsURL := fs.String("notify-apps-url", os.Getenv("SVETOVIT_NOTIFY_APPS_URL"), "like --notify-url, but only findings under --target (hosted sites), not OS packages (env SVETOVIT_NOTIFY_APPS_URL)")
 	renotifyFlag := fs.String("renotify", "", "with --state, remind about critical and high findings still open this long after the last message, e.g. 7d or 12h")
@@ -126,6 +126,7 @@ func run(args []string) int {
 		defer store.Close()
 	}
 
+	start := time.Now()
 	sc := scanner.New(registry, *depth)
 	sc.Workers = scanWorkers
 	sc.OpsPerSecond = opsPerSecond
@@ -210,6 +211,12 @@ func run(args []string) int {
 		{state.Apps, state.Apps, *notifyAppsURL, "Svetovit: hosted sites on " + host},
 	}
 	httpClient := &http.Client{Timeout: *timeout}
+	scanTime := now.Sub(start)
+	params := notify.Params{
+		Target: *target, Mode: *mode, Depth: *depth, Aggressivity: *aggressivity, Workers: scanWorkers,
+		CrossFilesystems: *crossFS, SkipSystem: *skipSystem, Confidence: *confidence, MinScore: *minScore,
+		Severity: severities,
+	}
 	for _, ch := range channels {
 		if ch.url == "" {
 			continue
@@ -227,7 +234,10 @@ func run(args []string) int {
 				}
 			}
 		}
-		if err := notify.Send(ctx, httpClient, ch.url, ch.title, host, events); err != nil {
+		sum := notify.Summary{
+			Title: ch.title, Host: host, Counts: notify.Count(findings, ch.scope), Duration: scanTime, Params: params,
+		}
+		if err := notify.Send(ctx, httpClient, ch.url, sum, events); err != nil {
 			// Not fatal: the events stay pending and are sent with the next run.
 			fmt.Fprintf(os.Stderr, "svetovit: %v\n", err)
 			continue

@@ -181,26 +181,36 @@ scans running at the same time wait for each other.
 
 ### `--notify-url <url>` (env `SVETOVIT_NOTIFY_URL`)
 
-Post findings to a chat webhook. The format follows the URL:
+Post a short scan summary to a chat webhook: the host, how many open findings there are per severity
+(CRIT/HIGH/MED/LOW), how long the scan took, and the options that shaped it (`--target`, `--mode`, `--depth`,
+`-a`, `--workers`, `-c`, `-m`, `-s`, `--cross-filesystems`, `--skip-system`). Individual findings are not sent; they
+are in the report (`-oJ` for tooling). The format follows the URL:
 
 - `https://hooks.slack.com/...`: a Slack message
-- `https://discord.com/api/webhooks/...`: a Discord message, kept under Discord's 2000-character limit
+- `https://discord.com/api/webhooks/...`: a Discord embed, coloured by the worst severity open (red critical, orange
+  high, yellow medium, blue low, green none)
 - anything else: JSON with a ready-made Markdown `text` (which Mattermost and Rocket.Chat incoming webhooks display
-  as-is) and an `events` list (`type`, `location`, `component`, `version`, `advisory_id`, `severity`, `score`,
-  `fixed_in`, `scope`, `first_seen`, `days_open`) for your own tooling
+  as-is) plus `host`, `counts` (`critical`, `high`, `medium`, `low`), `duration_seconds` and `params` for your own
+  tooling
 
-With `--state`, only changes are posted: new findings once, then their resolution as fixed or removed. A run with no
-changes posts nothing. If the webhook cannot be reached the scan still succeeds (with a warning) and the messages are
-sent on the next run. Without `--state`, every run posts all current findings.
+```
+Svetovit scan on web1
+CRIT 2 · HIGH 5 · MED 9 · LOW 1
+Scan took 12.4s
+Params: target=/var/www mode=small depth=unlimited aggressivity=3 workers=4 confidence=all min-score=7 severity=critical,high
+```
 
-The first time a webhook is used with an existing database, it gets one "N open" message with everything still open,
-instead of announcing years-old findings as new.
+The counts are all findings open after this run, not just the changed ones. With `--state`, a message is only posted
+when something changed: a new finding, a resolved or removed one, or a `--renotify` reminder. A run with no changes
+posts nothing. If the webhook cannot be reached the scan still succeeds (with a warning) and the message is sent on
+the next run. Without `--state`, every run posts.
 
-Long lists are cut with "…and N more"; the full list is in the report and in the generic payload's `events`.
+The first time a webhook is used with an existing database, it gets one message for everything still open, instead of
+announcing years-old findings as new.
 
 ### `--notify-system-url <url>`, `--notify-apps-url <url>` (env `SVETOVIT_NOTIFY_SYSTEM_URL`, `SVETOVIT_NOTIFY_APPS_URL`)
 
-The same as `--notify-url`, limited to one kind of finding:
+The same as `--notify-url`, with the counts limited to one kind of finding:
 
 - `--notify-system-url`: only the host's OS packages (`scope: system`), the server's own vulnerabilities
 - `--notify-apps-url`: only what was found under `--target` (`scope: apps`): CMS installs, plugins and lock files,
