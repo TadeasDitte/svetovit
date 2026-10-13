@@ -1,0 +1,82 @@
+stages:
+  - test
+  - build
+  - release
+
+default:
+  image: golang:1.26
+
+variables:
+  CGO_ENABLED: "0"
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_TAG =~ /^v/
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+test:
+  stage: test
+  script:
+    - go build ./...
+    - go vet ./...
+    - go test -count=1 -cover ./...
+    - CGO_ENABLED=1 go test -count=1 -race ./...
+
+build:
+  stage: build
+  parallel:
+    matrix:
+      - GOOS: [linux, darwin, windows]
+        GOARCH: [amd64, arm64]
+  script:
+    - ext=""; [ "$GOOS" = windows ] && ext=.exe
+    - go build -trimpath -ldflags "-s -w" -o "dist/svetovit-$GOOS-$GOARCH$ext" ./cmd/svetovit
+  artifacts:
+    paths:
+      - dist/
+    expire_in: 1 week
+
+upload:
+  stage: release
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
+  script:
+    - |
+      for f in dist/*; do
+        curl --fail --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file "$f" \
+          "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/svetovit/$CI_COMMIT_TAG/$(basename "$f")"
+      done
+
+release:
+  stage: release
+  needs: [upload]
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
+  script:
+    - echo "Releasing $CI_COMMIT_TAG"
+  release:
+    tag_name: $CI_COMMIT_TAG
+    name: $CI_COMMIT_TAG
+    description: $CI_COMMIT_TAG
+    assets:
+      links:
+        - name: svetovit-linux-amd64
+          url: "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/svetovit/$CI_COMMIT_TAG/svetovit-linux-amd64"
+          link_type: package
+        - name: svetovit-linux-arm64
+          url: "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/svetovit/$CI_COMMIT_TAG/svetovit-linux-arm64"
+          link_type: package
+        - name: svetovit-darwin-amd64
+          url: "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/svetovit/$CI_COMMIT_TAG/svetovit-darwin-amd64"
+          link_type: package
+        - name: svetovit-darwin-arm64
+          url: "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/svetovit/$CI_COMMIT_TAG/svetovit-darwin-arm64"
+          link_type: package
+        - name: svetovit-windows-amd64.exe
+          url: "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/svetovit/$CI_COMMIT_TAG/svetovit-windows-amd64.exe"
+          link_type: package
+        - name: svetovit-windows-arm64.exe
+          url: "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/svetovit/$CI_COMMIT_TAG/svetovit-windows-arm64.exe"
+          link_type: package

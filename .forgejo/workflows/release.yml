@@ -1,0 +1,38 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  release:
+    runs-on: docker
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build binaries
+        env:
+          CGO_ENABLED: 0
+        run: |
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            goos=${target%/*}
+            goarch=${target#*/}
+            ext=""
+            [ "$goos" = windows ] && ext=.exe
+            GOOS=$goos GOARCH=$goarch go build -trimpath -ldflags "-s -w" \
+              -o "dist/svetovit-$goos-$goarch$ext" ./cmd/svetovit
+          done
+
+      - uses: https://code.forgejo.org/actions/forgejo-release@v2
+        with:
+          direction: upload
+          url: ${{ github.server_url }}
+          repo: ${{ github.repository }}
+          token: ${{ github.token }}
+          tag: ${{ github.ref_name }}
+          release-dir: dist
+          override: true

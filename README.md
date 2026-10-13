@@ -157,6 +157,25 @@ extension versions from). Drop in a new file and it is picked up automatically.
 go test ./...
 ```
 
+### CI and releases
+
+The repository carries equivalent pipelines for GitHub, Forgejo and GitLab, so it can be mirrored to any of them:
+
+| Platform | Config | Releases |
+|---|---|---|
+| GitHub | [`.github/workflows/`](.github/workflows) | release-please opens a release PR from conventional commits; merging it tags the version and publishes the binaries |
+| Forgejo | [`.forgejo/workflows/`](.forgejo/workflows) | pushing a `v*` tag builds the binaries and attaches them to a Forgejo release |
+| GitLab | [`.gitlab-ci.yml`](.gitlab-ci.yml) | pushing a `v*` tag uploads the binaries to the generic package registry and creates a release linking them |
+
+release-please only works with the GitHub API, so on Forgejo and GitLab the version tag has to come from elsewhere:
+pushed by hand or mirrored from GitHub. Forgejo jobs run on runners labelled `docker`, and only GitHub tests on
+macOS and Windows; the other two test on Linux and cross-build for every platform.
+
+```bash
+git tag --sort=-v:refname | head -1
+git tag -a vX.X.X -m "vX.X.X"
+git push origin vX.X.X
+```
 ## Contributors
 
 <a href="https://github.com/TadeasDitte" title="TadeasDitte">
