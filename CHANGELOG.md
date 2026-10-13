@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.0](https://github.com/TadeasDitte/svetovit/compare/v1.7.0...v1.8.0) (2026-10-13)
+
+
+### Features
+
+* add CI/CD workflows for GitHub, Forgejo, and GitLab with build and release processes ([7fdf5ed](https://github.com/TadeasDitte/svetovit/commit/7fdf5ed58fbacfac474b559e5959a81496d6d3a9))
+
 ## [1.7.0](https://github.com/TadeasDitte/svetovit/compare/v1.6.0...v1.7.0) (2026-10-11)
 
 
