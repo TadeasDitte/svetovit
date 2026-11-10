@@ -285,8 +285,8 @@ func suffix(n int) string {
 }
 
 func printChanges(w io.Writer, changes *state.Changes, now time.Time) {
-	fmt.Fprintf(w, "\nSince last scan: %d new, %d fixed, %d removed; %d open",
-		len(changes.New), len(changes.Fixed), len(changes.Removed), changes.Open)
+	fmt.Fprintf(w, "\nSince last scan: %d new, %d fixed, %d removed, %d withdrawn; %d open",
+		len(changes.New), len(changes.Fixed), len(changes.Removed), len(changes.Withdrawn), changes.Open)
 	if changes.Open > 0 && !changes.OldestOpen.IsZero() {
 		fmt.Fprintf(w, ", oldest open for %d day%s", daysSince(changes.OldestOpen, now), suffix(daysSince(changes.OldestOpen, now)))
 	}
@@ -295,7 +295,11 @@ func printChanges(w io.Writer, changes *state.Changes, now time.Time) {
 	for _, list := range []struct {
 		title  string
 		events []state.Event
-	}{{"Fixed", changes.Fixed}, {"Removed (location no longer exists)", changes.Removed}} {
+	}{
+		{"Fixed", changes.Fixed},
+		{"Removed (location no longer exists)", changes.Removed},
+		{"Withdrawn (no longer reported by the API, the install is unchanged)", changes.Withdrawn},
+	} {
 		if len(list.events) == 0 {
 			continue
 		}

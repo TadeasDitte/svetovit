@@ -108,7 +108,7 @@ func TestNVDOnlyDropsOSVAdvisories(t *testing.T) {
 	}
 }
 
-func TestCheckVulnsTakesVendorFromAffectedRangeAndFlagsAmbiguous(t *testing.T) {
+func TestCheckVulnsNamesFindingsAfterScannedComponentAndFlagsAmbiguous(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"data":[
 			{"product":"snappy","vulnerable":true,"ambiguous":false,"vulnerabilities":[
@@ -124,7 +124,7 @@ func TestCheckVulnsTakesVendorFromAffectedRangeAndFlagsAmbiguous(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(resp.Vulnerable) != 1 || resp.Vulnerable[0].Vendor != "knplabs" || resp.Vulnerable[0].FixedIn != "1.2" {
+	if len(resp.Vulnerable) != 1 || resp.Vulnerable[0].Vendor != "" || resp.Vulnerable[0].Name() != "snappy" || resp.Vulnerable[0].FixedIn != "1.2" {
 		t.Errorf("unexpected vulnerable: %+v", resp.Vulnerable)
 	}
 	if len(resp.Unmatched) != 1 || resp.Unmatched[0].Product != "orc" || !resp.Unmatched[0].Ambiguous {
@@ -182,7 +182,7 @@ func TestCheckVulnsResolvesAmbiguousCandidates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(resp.Vulnerable) != 1 || resp.Vulnerable[0].Vendor != "automattic" || resp.Vulnerable[0].LocalID != "/a,/b" {
+	if len(resp.Vulnerable) != 1 || resp.Vulnerable[0].Name() != "akismet" || resp.Vulnerable[0].LocalID != "/a,/b" {
 		t.Errorf("unexpected vulnerable: %+v", resp.Vulnerable)
 	}
 	if len(resp.Unmatched) != 1 || resp.Unmatched[0].Product != "orc" {
@@ -300,5 +300,72 @@ func TestCheckVulnsKeepsUnknownScoresForMinScore(t *testing.T) {
 	}
 	if len(got) != 3 || got["GHSA-high"] != nil || got["GHSA-crit"] != nil || got["CVE-scored"] == nil || *got["CVE-scored"] != 7.8 {
 		t.Errorf("unexpected vulnerable set: %+v", got)
+	}
+}
+
+func TestOneInstallIsOneComponentWhateverVendorsMatch(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req batchRequest
+		json.NewDecoder(r.Body).Decode(&req)
+		out := batchResponse{}
+		for _, p := range req.Packages {
+			res := checkResult{Product: p.Product}
+			mk := func(id string) apiVulnerability {
+				v := apiVulnerability{ID: id, CVSSScore: new(7.1), Severity: "HIGH", Confidence: "high"}
+				v.AffectedRange.PlugsInto = "wordpress"
+				return v
+			}
+			switch {
+			case p.Product == "forminator" && p.Vendor == "":
+				res.Ambiguous = true
+				res.Candidates = []candidate{{Vendor: "incsub"}, {Vendor: "wpmudev"}, {Vendor: "lowonly"}}
+			case p.Vendor == "incsub":
+				res.Vulnerabilities = []apiVulnerability{mk("CVE-SHARED"), mk("CVE-INCSUB")}
+			case p.Vendor == "wpmudev":
+				res.Vulnerabilities = []apiVulnerability{mk("CVE-SHARED")}
+			case p.Vendor == "lowonly":
+				low := mk("CVE-LOW")
+				low.Confidence = "low"
+				res.Vulnerabilities = []apiVulnerability{low}
+			case p.Product == "metform":
+				res.Vulnerabilities = []apiVulnerability{mk("CVE-M"), mk("CVE-M")}
+			}
+			out.Data = append(out.Data, res)
+		}
+		json.NewEncoder(w).Encode(out)
+	}))
+	defer srv.Close()
+
+	comps := []Component{
+		{Product: "forminator", Version: "1.38.1", LocalID: "/p/forminator", ResolveAmbiguous: true, Platform: "wordpress"},
+		{Product: "forminator", Version: "1.38.1", LocalID: "/q/forminator", ResolveAmbiguous: true, Platform: "wordpress"},
+		{Product: "metform", Version: "3", LocalID: "/p/metform", ResolveAmbiguous: true, Platform: "wordpress"},
+	}
+	resp, err := New(srv.URL, "").CheckVulns(context.Background(), comps, 0, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int{}
+	for _, v := range resp.Vulnerable {
+		got[v.Name()+" "+v.CVEID+" "+v.LocalID]++
+	}
+	want := map[string]int{
+		"forminator CVE-SHARED /p/forminator,/q/forminator": 1,
+		"forminator CVE-INCSUB /p/forminator,/q/forminator": 1,
+		"metform CVE-M /p/metform":                          1,
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("vulnerable: got %v, want %v", got, want)
+	}
+	for _, loc := range []string{"/p/forminator", "/q/forminator"} {
+		if n := len(resp.ByLocation[loc].Vulnerable); n != 2 {
+			t.Errorf("%s: %d findings, want 2: %+v", loc, n, resp.ByLocation[loc].Vulnerable)
+		}
+		if u := resp.ByLocation[loc].Unmatched; len(u) != 1 || u[0].Vendor != "" || u[0].Product != "forminator" {
+			t.Errorf("%s: unmatched %+v", loc, u)
+		}
+	}
+	if len(resp.Unmatched) != 1 {
+		t.Errorf("unmatched listed more than once: %+v", resp.Unmatched)
 	}
 }

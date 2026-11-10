@@ -43,10 +43,25 @@ type Component struct {
 	Platform string `json:"-"`
 
 	requirePlatform bool
+
+	// origin is the scanned component a re-check under a candidate vendor stands in for; findings are reported under it.
+	origin *Component
+}
+
+func (c Component) scanned() Component {
+	if c.origin != nil {
+		return *c.origin
+	}
+	return c
+}
+
+func (c Component) Name() string {
+	s := c.scanned()
+	return QualifiedName(s.Vendor, s.Product)
 }
 
 func requestKey(comp Component) string {
-	return strings.Join([]string{comp.Vendor, comp.Product, comp.Version, comp.Ecosystem}, keySep)
+	return strings.Join([]string{comp.Vendor, comp.Product, comp.Version, comp.Ecosystem, comp.scanned().Vendor}, keySep)
 }
 
 type batchPackage struct {
@@ -70,7 +85,6 @@ type apiVulnerability struct {
 	FixedIn    string   `json:"fixed_in"`
 
 	AffectedRange struct {
-		Vendor    string `json:"vendor"`
 		PlugsInto string `json:"plugs_into"`
 	} `json:"affected_range"`
 }
@@ -235,12 +249,14 @@ func (c *Client) CheckVulns(ctx context.Context, components []Component, minScor
 			if results[i].Ambiguous && comp.ResolveAmbiguous && comp.Platform != "" && len(results[i].Candidates) > 0 {
 				for _, cand := range results[i].Candidates {
 					for _, loc := range locs {
-						followUps = append(followUps, Component{Vendor: cand.Vendor, Product: comp.Product, Version: comp.Version, Ecosystem: cand.Ecosystem, LocalID: loc, NVDOnly: comp.NVDOnly, Platform: comp.Platform, requirePlatform: true})
+						origin := comp.scanned()
+						followUps = append(followUps, Component{Vendor: cand.Vendor, Product: comp.Product, Version: comp.Version, Ecosystem: cand.Ecosystem, LocalID: loc, NVDOnly: comp.NVDOnly, Platform: comp.Platform, requirePlatform: true, origin: &origin})
 					}
 				}
 				continue
 			}
 
+			scanned := comp.scanned()
 			hasHigh, hasLow := false, results[i].Ambiguous
 			for _, v := range results[i].Vulnerabilities {
 				if comp.NVDOnly && v.Source != "nvd" {
@@ -257,13 +273,9 @@ func (c *Client) CheckVulns(ctx context.Context, components []Component, minScor
 				if !MeetsMinScore(v.CVSSScore, v.Severity, minScore) || (len(allowed) > 0 && !allowed[strings.ToUpper(v.Severity)]) {
 					continue
 				}
-				vendor := comp.Vendor
-				if vendor == "" {
-					vendor = v.AffectedRange.Vendor
-				}
 				vuln := Vulnerability{
-					Vendor:           vendor,
-					Product:          comp.Product,
+					Vendor:           scanned.Vendor,
+					Product:          scanned.Product,
 					LocalID:          localID,
 					InstalledVersion: comp.Version,
 					CVEID:            v.ID,
@@ -279,7 +291,7 @@ func (c *Client) CheckVulns(ctx context.Context, components []Component, minScor
 			}
 
 			if hasLow && !hasHigh {
-				unm := UnmatchedComponent{Vendor: comp.Vendor, Product: comp.Product, InstalledVersion: comp.Version, LocalID: localID, Ambiguous: results[i].Ambiguous}
+				unm := UnmatchedComponent{Vendor: scanned.Vendor, Product: scanned.Product, InstalledVersion: comp.Version, LocalID: localID, Ambiguous: results[i].Ambiguous}
 				merged.Unmatched = append(merged.Unmatched, unm)
 				for _, loc := range locs {
 					entry := merged.locationEntry(loc)
@@ -298,6 +310,7 @@ func (c *Client) CheckVulns(ctx context.Context, components []Component, minScor
 		merged.Merge(resolved)
 	}
 
+	merged.dedupe()
 	return merged, nil
 }
 func (c *Client) checkBatch(ctx context.Context, packages []batchPackage, includeLow bool) ([]checkResult, error) {

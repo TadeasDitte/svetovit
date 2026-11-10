@@ -123,9 +123,10 @@ from Ansible or cron on many hosts:
 ## Tracking changes and notifications
 
 With `--state`, Svetovit keeps its findings in a SQLite database and the report ends with what changed since the
-last run: new findings, fixed ones, removed ones (the site or plugin was deleted) and how long the rest have been
-open. A finding counts as fixed only after two consecutive scans of its location miss it, and a failed run never
-touches the database. `--notify-url` posts a short summary (host, counts per severity, scan duration, scan
+last run: new findings, fixed ones, removed ones (the site or plugin was deleted), withdrawn ones (the API stopped
+reporting an advisory for an install that did not change) and how long the rest have been open. A finding counts as
+fixed only after two consecutive scans of its location miss it *and* the version it affects is gone, and a failed run
+never touches the database. Updating a component that an advisory still affects keeps the finding and its age. `--notify-url` posts a short summary (host, counts per severity, scan duration, scan
 parameters) to Slack, Discord or any JSON webhook whenever something changed;
 `--renotify 7d` adds a weekly reminder about critical and high findings that are still open. On a hosting server,
 `--notify-system-url` and `--notify-apps-url` send summaries of the server's own OS package findings and the hosted sites'

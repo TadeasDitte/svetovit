@@ -169,16 +169,25 @@ still open and the age of the oldest, plus a table of what was fixed or removed.
 must be given with `=`: `--state=/srv/svetovit.db`. The database is opened before the scan starts, so an unwritable
 path fails straight away instead of after a long walk.
 
-A finding is one advisory affecting one component version at one location (install root, plugin directory or lock
-file). From one run to the next:
+A finding is one advisory affecting one component at one location (install root, plugin directory or lock file). The
+component is named after the install, not after the vendor of whichever advisory range matched it, so one install is
+one component however many vendor names the API files its advisories under. The installed version is an attribute of
+the finding, not part of its identity: updating a component that is still affected keeps the finding and its age, and
+`version` names the versions it is now installed at. From one run to the next:
 
 | Situation | Result |
 |---|---|
-| in this scan, not in the database (or resolved there) | **new** |
+| in this scan, not in the database (or fixed or removed there) | **new** |
 | in this scan and open in the database | still open; nothing is announced |
-| missing from 2 consecutive scans of its location | **fixed** |
+| in this scan, withdrawn in the database | open again, with its original age; nothing is announced |
+| missing from 2 consecutive scans of its location, and the version it affects is no longer installed | **fixed** |
+| missing from 2 consecutive scans of its location, although that version is still installed | **withdrawn**: the API stopped returning the advisory, the install did not change |
 | its location below `--target` no longer exists, for 2 consecutive runs | **removed**: the site or plugin was deleted, not updated |
 | its location was not scanned this run (another `--target`, an unreadable directory, a lock file that failed to parse, `--skip-system`), or it falls outside this run's `-m` / `-s` filters | left alone |
+
+**Withdrawn** keeps a gap in the server's data from looking like remediation: the component is still installed at the
+version the advisory covers, so nothing was fixed. It is reported and notified separately from `fixed`, and if the
+advisory comes back the finding simply continues, with the age it had.
 
 A run that fails (exit 1) never updates the database, so a failed API request cannot mark everything fixed. Two
 scans running at the same time wait for each other.
@@ -205,7 +214,7 @@ Params: target=/var/www mode=small depth=unlimited aggressivity=3 workers=4 conf
 ```
 
 The counts are all findings open after this run, not just the changed ones. With `--state`, a message is only posted
-when something changed: a new finding, a resolved or removed one, or a `--renotify` reminder. A run with no changes
+when something changed: a new finding, a fixed, removed or withdrawn one, or a `--renotify` reminder. A run with no changes
 posts nothing. If the webhook cannot be reached the scan still succeeds (with a warning) and the message is sent on
 the next run. Without `--state`, every run posts.
 

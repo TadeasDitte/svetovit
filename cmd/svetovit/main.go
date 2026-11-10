@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -171,8 +172,9 @@ func run(args []string) int {
 	}
 
 	var sys *report.System
+	var sysComponents []rozhanitsy.Component
 	if !*skipSystem {
-		sys, err = checkSystem(client, *minScore, severities, confidenceMode != "bounded")
+		sys, sysComponents, err = checkSystem(client, *minScore, severities, confidenceMode != "bounded")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "svetovit: %v\n", err)
 			return 1
@@ -183,12 +185,12 @@ func run(args []string) int {
 	findings := collectFindings(resp, sys)
 	var changes *state.Changes
 	if store != nil {
-		scanned := make(map[string]bool, len(components)+1)
-		for _, c := range components {
-			scanned[c.LocalID] = true
+		scanned := make(state.Inventory, len(components)+1)
+		for _, c := range apiComponents {
+			scanned.Add(c.LocalID, c.Name(), c.Version)
 		}
-		if sys != nil {
-			scanned[sys.Source] = true
+		for _, c := range sysComponents {
+			scanned.Add(c.LocalID, c.Name(), c.Version)
 		}
 		absTarget, _ := filepath.Abs(*target)
 		changes, err = store.Sync(state.Run{
@@ -286,19 +288,19 @@ func run(args []string) int {
 	return 0
 }
 
-func checkSystem(client *rozhanitsy.Client, minScore float64, severities []string, includeLow bool) (*report.System, error) {
+func checkSystem(client *rozhanitsy.Client, minScore float64, severities []string, includeLow bool) (*report.System, []rozhanitsy.Component, error) {
 	env, err := system.Detect()
 	if errors.Is(err, system.ErrUnsupported) {
 		fmt.Fprintf(os.Stderr, "svetovit: skipping system packages: %v\n", err)
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("detecting operating system: %w", err)
+		return nil, nil, fmt.Errorf("detecting operating system: %w", err)
 	}
 
 	packages, err := env.Packages()
 	if err != nil {
-		return nil, fmt.Errorf("listing %s packages: %w", env.Manager, err)
+		return nil, nil, fmt.Errorf("listing %s packages: %w", env.Manager, err)
 	}
 
 	components := make([]rozhanitsy.Component, len(packages))
@@ -314,14 +316,14 @@ func checkSystem(client *rozhanitsy.Client, minScore float64, severities []strin
 
 	resp, err := client.CheckVulns(context.Background(), components, minScore, severities, includeLow)
 	if err != nil {
-		return nil, fmt.Errorf("checking system packages: %w", err)
+		return nil, nil, fmt.Errorf("checking system packages: %w", err)
 	}
 
 	if env.Manager == system.Nix {
-		resp = refineWithNixCPEs(client, components, resp, minScore, severities, includeLow)
+		components, resp = refineWithNixCPEs(client, components, resp, minScore, severities, includeLow)
 	}
 
-	return &report.System{Name: env.Name, Ecosystem: env.Ecosystem, Source: env.Source(), Response: resp}, nil
+	return &report.System{Name: env.Name, Ecosystem: env.Ecosystem, Source: env.Source(), Response: resp}, components, nil
 }
 
 func parseSections(confidence string) (report.Sections, string, error) {
@@ -394,7 +396,9 @@ func writeReportFile(path string, write func(io.Writer) error) error {
 	return write(f)
 }
 
-func refineWithNixCPEs(client *rozhanitsy.Client, components []rozhanitsy.Component, resp *rozhanitsy.CheckResponse, minScore float64, severities []string, includeLow bool) *rozhanitsy.CheckResponse {
+// refineWithNixCPEs re-checks the flagged nix packages under their exact nixpkgs vendor and product, and returns the
+// components as they were finally checked, so the caller knows what each finding is named after.
+func refineWithNixCPEs(client *rozhanitsy.Client, components []rozhanitsy.Component, resp *rozhanitsy.CheckResponse, minScore float64, severities []string, includeLow bool) ([]rozhanitsy.Component, *rozhanitsy.CheckResponse) {
 	flagged := make(map[string]bool)
 	for _, v := range resp.Vulnerable {
 		flagged[v.Product] = true
@@ -413,26 +417,30 @@ func refineWithNixCPEs(client *rozhanitsy.Client, components []rozhanitsy.Compon
 	cpes, err := system.NixCPEs(names)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "svetovit: %v; keeping name-only matches\n", err)
-		return resp
+		return components, resp
 	}
 	if len(cpes) == 0 {
-		return resp
+		return components, resp
 	}
 
+	effective := slices.Clone(components)
 	var refined []rozhanitsy.Component
-	for _, c := range components {
-		if cpe, ok := cpes[c.Product]; ok {
-			c.Vendor, c.Product = cpe.Vendor, cpe.Product
-			refined = append(refined, c)
+	for i, c := range effective {
+		cpe, ok := cpes[c.Product]
+		if !ok {
+			continue
 		}
+		c.Vendor, c.Product = cpe.Vendor, cpe.Product
+		effective[i] = c
+		refined = append(refined, c)
 	}
 	rechecked, err := client.CheckVulns(context.Background(), refined, minScore, severities, includeLow)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "svetovit: rechecking with nixpkgs CPEs: %v; keeping name-only matches\n", err)
-		return resp
+		return components, resp
 	}
 
 	resp.Remove(func(product string) bool { _, ok := cpes[product]; return ok })
 	resp.Merge(rechecked)
-	return resp
+	return effective, resp
 }

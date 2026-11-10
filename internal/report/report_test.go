@@ -288,13 +288,17 @@ func TestPrintChanges(t *testing.T) {
 	changes := &state.Changes{
 		New:        []state.Event{{Kind: state.New}},
 		Fixed:      []state.Event{{Kind: state.Fixed, DaysOpen: 12, Finding: state.Finding{Location: "/www/shop", Component: "woocommerce", Version: "8.1.0", AdvisoryID: "CVE-FIXED", Severity: "HIGH", Score: new(7.5)}}},
+		Withdrawn:  []state.Event{{Kind: state.Withdrawn, DaysOpen: 22, Finding: state.Finding{Location: "/www/blog", Component: "laravel", Version: "11.26.0", AdvisoryID: "CVE-GONE", Severity: "HIGH", Score: new(8.0)}}},
 		Open:       3,
 		OldestOpen: checkedAt.AddDate(0, 0, -34),
 	}
 	var buf bytes.Buffer
 	Print(&buf, &rozhanitsy.CheckResponse{CheckedAt: checkedAt}, nil, changes, Sections{Bounded: true}, false)
 	out := buf.String()
-	for _, want := range []string{"Since last scan: 1 new, 1 fixed, 0 removed; 3 open, oldest open for 34 days", "Fixed:", "CVE-FIXED", "12d", "/www/shop"} {
+	for _, want := range []string{
+		"Since last scan: 1 new, 1 fixed, 0 removed, 1 withdrawn; 3 open, oldest open for 34 days",
+		"Fixed:", "CVE-FIXED", "12d", "/www/shop", "Withdrawn", "CVE-GONE", "22d", "/www/blog",
+	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
@@ -306,14 +310,16 @@ func TestPrintChanges(t *testing.T) {
 	}
 	var got struct {
 		Changes struct {
-			Fixed []map[string]any `json:"fixed"`
-			Open  int              `json:"open"`
+			Fixed     []map[string]any `json:"fixed"`
+			Withdrawn []map[string]any `json:"withdrawn"`
+			Open      int              `json:"open"`
 		} `json:"changes"`
 	}
 	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Changes.Open != 3 || len(got.Changes.Fixed) != 1 || got.Changes.Fixed[0]["advisory_id"] != "CVE-FIXED" {
+	if got.Changes.Open != 3 || len(got.Changes.Fixed) != 1 || got.Changes.Fixed[0]["advisory_id"] != "CVE-FIXED" ||
+		len(got.Changes.Withdrawn) != 1 || got.Changes.Withdrawn[0]["advisory_id"] != "CVE-GONE" {
 		t.Fatalf("changes JSON: %s", buf.String())
 	}
 }

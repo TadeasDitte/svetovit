@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -31,7 +32,7 @@ CREATE TABLE IF NOT EXISTS findings (
   clean_runs       INTEGER NOT NULL DEFAULT 0,
   resolved_at      INTEGER,
   resolution       TEXT,
-  PRIMARY KEY (location, component, version, advisory_id)
+  PRIMARY KEY (location, component, advisory_id)
 );
 CREATE INDEX IF NOT EXISTS findings_open ON findings (resolved_at);
 CREATE TABLE IF NOT EXISTS channels (
@@ -42,23 +43,22 @@ CREATE TABLE IF NOT EXISTS deliveries (
   channel          TEXT NOT NULL,
   location         TEXT NOT NULL,
   component        TEXT NOT NULL,
-  version          TEXT NOT NULL,
   advisory_id      TEXT NOT NULL,
   notified_at      INTEGER NOT NULL,
   resolve_notified INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (channel, location, component, version, advisory_id)
+  PRIMARY KEY (channel, location, component, advisory_id)
 );
 `
 
 type Finding struct {
-	Location   string  `json:"location"`
-	Component  string  `json:"component"`
-	Version    string  `json:"version"`
-	AdvisoryID string  `json:"advisory_id"`
-	Severity   string  `json:"severity"`
+	Location   string   `json:"location"`
+	Component  string   `json:"component"`
+	Version    string   `json:"version"` // several installed versions affected at one location are joined with ", "
+	AdvisoryID string   `json:"advisory_id"`
+	Severity   string   `json:"severity"`
 	Score      *float64 `json:"score"`
-	FixedIn    string  `json:"fixed_in,omitempty"`
-	Scope      string  `json:"scope"`
+	FixedIn    string   `json:"fixed_in,omitempty"`
+	Scope      string   `json:"scope"`
 }
 
 type Kind string
@@ -72,9 +72,12 @@ const (
 	New       Kind = "new"
 	Fixed     Kind = "fixed"
 	Removed   Kind = "removed"
+	Withdrawn Kind = "withdrawn"
 	StillOpen Kind = "still_open"
 	Current   Kind = "current"
 )
+
+func (k Kind) resolves() bool { return k == Fixed || k == Removed || k == Withdrawn }
 
 type Event struct {
 	Kind Kind `json:"type"`
@@ -87,14 +90,27 @@ type Changes struct {
 	New        []Event   `json:"new"`
 	Fixed      []Event   `json:"fixed"`
 	Removed    []Event   `json:"removed"`
+	Withdrawn  []Event   `json:"withdrawn"`
 	Open       int       `json:"open"`
 	OldestOpen time.Time `json:"oldest_open,omitzero"`
+}
+
+// Inventory holds the locations scanned in a run and, for each, the installed versions of every component found there.
+type Inventory map[string]map[string][]string
+
+func (inv Inventory) Add(location, component, version string) {
+	if inv[location] == nil {
+		inv[location] = make(map[string][]string)
+	}
+	if !slices.Contains(inv[location][component], version) {
+		inv[location][component] = append(inv[location][component], version)
+	}
 }
 
 type Run struct {
 	Now        time.Time
 	Findings   []Finding
-	Scanned    map[string]bool
+	Scanned    Inventory
 	TargetRoot string
 	InScope    func(severity string, score *float64) bool
 }
@@ -162,6 +178,7 @@ var migrations = []func(tx *sql.Tx) error{
 		_, err := tx.Exec(`UPDATE findings SET score = NULL WHERE score = 0`)
 		return err
 	},
+	rekey,
 }
 
 func migrate(db *sql.DB) error {
@@ -212,47 +229,83 @@ func (s *Store) Sync(run Run) (*Changes, error) {
 	return changes, nil
 }
 
-type key struct{ location, component, version, advisory string }
+type key struct{ location, component, advisory string }
 
-func (f Finding) key() key { return key{f.Location, f.Component, f.Version, f.AdvisoryID} }
+func (f Finding) key() key { return key{f.Location, f.Component, f.AdvisoryID} }
+
+const versionSep = ", "
+
+func addVersion(list, version string) string {
+	versions := strings.Split(list, versionSep)
+	if slices.Contains(versions, version) {
+		return list
+	}
+	versions = append(versions, version)
+	slices.Sort(versions)
+	return strings.Join(versions, versionSep)
+}
+
+func stillInstalled(versions string, installed []string) bool {
+	for _, v := range strings.Split(versions, versionSep) {
+		if slices.Contains(installed, v) {
+			return true
+		}
+	}
+	return false
+}
+
+func updateFinding(tx *sql.Tx, f *Finding, set string, args ...any) error {
+	args = append([]any{f.Version, f.Severity, f.Score, f.FixedIn, f.Scope}, args...)
+	_, err := tx.Exec(`UPDATE findings SET version = ?, severity = ?, score = ?, fixed_in = ?, scope = ?, `+set+`
+		WHERE location = ? AND component = ? AND advisory_id = ?`, append(args, f.Location, f.Component, f.AdvisoryID)...)
+	return err
+}
 
 func sync(tx *sql.Tx, run Run) (*Changes, error) {
 	now := run.Now.Unix()
-	changes := &Changes{New: []Event{}, Fixed: []Event{}, Removed: []Event{}}
-	seen := make(map[key]bool, len(run.Findings))
+	changes := &Changes{New: []Event{}, Fixed: []Event{}, Removed: []Event{}, Withdrawn: []Event{}}
+	seen := make(map[key]*Finding, len(run.Findings))
+	var found []*Finding
 
 	for _, f := range run.Findings {
-		if seen[f.key()] {
+		if prev := seen[f.key()]; prev != nil {
+			prev.Version = addVersion(prev.Version, f.Version)
 			continue
 		}
-		seen[f.key()] = true
+		seen[f.key()] = &f
+		found = append(found, &f)
+	}
 
+	for _, f := range found {
 		var resolved sql.NullInt64
-		err := tx.QueryRow(`SELECT resolved_at FROM findings WHERE location = ? AND component = ? AND version = ? AND advisory_id = ?`,
-			f.Location, f.Component, f.Version, f.AdvisoryID).Scan(&resolved)
+		var resolution sql.NullString
+		err := tx.QueryRow(`SELECT resolved_at, resolution FROM findings WHERE location = ? AND component = ? AND advisory_id = ?`,
+			f.Location, f.Component, f.AdvisoryID).Scan(&resolved, &resolution)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			_, err = tx.Exec(`INSERT INTO findings (location, component, version, advisory_id, severity, score, fixed_in, scope, first_seen, last_seen)
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				f.Location, f.Component, f.Version, f.AdvisoryID, f.Severity, f.Score, f.FixedIn, f.Scope, now, now)
-			changes.New = append(changes.New, Event{Kind: New, Finding: f, FirstSeen: run.Now})
+			changes.New = append(changes.New, Event{Kind: New, Finding: *f, FirstSeen: run.Now})
 		case err != nil:
 			return nil, err
-		case resolved.Valid:
-			// Back after being resolved (a restored backup, a downgrade): announce it again, counting from now.
-			_, err = tx.Exec(`UPDATE findings SET severity = ?, score = ?, fixed_in = ?, scope = ?, first_seen = ?, last_seen = ?, clean_runs = 0,
-				resolved_at = NULL, resolution = NULL
-				WHERE location = ? AND component = ? AND version = ? AND advisory_id = ?`,
-				f.Severity, f.Score, f.FixedIn, f.Scope, now, now, f.Location, f.Component, f.Version, f.AdvisoryID)
+		case !resolved.Valid:
+			err = updateFinding(tx, f, `last_seen = ?, clean_runs = 0`, now)
+		case Kind(resolution.String) == Withdrawn:
+			// Reported again for an install that did not change: it carries on, without being announced again.
+			err = updateFinding(tx, f, `last_seen = ?, clean_runs = 0, resolved_at = NULL, resolution = NULL`, now)
 			if err == nil {
-				_, err = tx.Exec(`DELETE FROM deliveries WHERE location = ? AND component = ? AND version = ? AND advisory_id = ?`,
-					f.Location, f.Component, f.Version, f.AdvisoryID)
+				_, err = tx.Exec(`UPDATE deliveries SET resolve_notified = 0 WHERE location = ? AND component = ? AND advisory_id = ?`,
+					f.Location, f.Component, f.AdvisoryID)
 			}
-			changes.New = append(changes.New, Event{Kind: New, Finding: f, FirstSeen: run.Now})
 		default:
-			_, err = tx.Exec(`UPDATE findings SET severity = ?, score = ?, fixed_in = ?, scope = ?, last_seen = ?, clean_runs = 0
-				WHERE location = ? AND component = ? AND version = ? AND advisory_id = ?`,
-				f.Severity, f.Score, f.FixedIn, f.Scope, now, f.Location, f.Component, f.Version, f.AdvisoryID)
+			// Back after being fixed or removed (a restored backup, a downgrade): announce it again, counting from now.
+			err = updateFinding(tx, f, `first_seen = ?, last_seen = ?, clean_runs = 0, resolved_at = NULL, resolution = NULL`, now, now)
+			if err == nil {
+				_, err = tx.Exec(`DELETE FROM deliveries WHERE location = ? AND component = ? AND advisory_id = ?`,
+					f.Location, f.Component, f.AdvisoryID)
+			}
+			changes.New = append(changes.New, Event{Kind: New, Finding: *f, FirstSeen: run.Now})
 		}
 		if err != nil {
 			return nil, err
@@ -264,15 +317,18 @@ func sync(tx *sql.Tx, run Run) (*Changes, error) {
 		return nil, err
 	}
 	for _, o := range open {
-		if seen[o.key()] {
+		if seen[o.key()] != nil {
 			continue
 		}
 		if run.InScope != nil && !run.InScope(o.Severity, o.Score) {
 			continue
 		}
 		var resolution Kind
+		installed, scanned := run.Scanned[o.Location]
 		switch {
-		case run.Scanned[o.Location]:
+		case scanned && stillInstalled(o.Version, installed[o.Component]):
+			resolution = Withdrawn
+		case scanned:
 			resolution = Fixed
 		case under(o.Location, run.TargetRoot) && gone(o.Location):
 			resolution = Removed
@@ -281,22 +337,25 @@ func sync(tx *sql.Tx, run Run) (*Changes, error) {
 		}
 		if o.cleanRuns+1 < CleanRunsToResolve {
 			if _, err := tx.Exec(`UPDATE findings SET clean_runs = clean_runs + 1
-				WHERE location = ? AND component = ? AND version = ? AND advisory_id = ?`,
-				o.Location, o.Component, o.Version, o.AdvisoryID); err != nil {
+				WHERE location = ? AND component = ? AND advisory_id = ?`,
+				o.Location, o.Component, o.AdvisoryID); err != nil {
 				return nil, err
 			}
 			continue
 		}
 		if _, err := tx.Exec(`UPDATE findings SET clean_runs = clean_runs + 1, resolved_at = ?, resolution = ?
-			WHERE location = ? AND component = ? AND version = ? AND advisory_id = ?`,
-			now, string(resolution), o.Location, o.Component, o.Version, o.AdvisoryID); err != nil {
+			WHERE location = ? AND component = ? AND advisory_id = ?`,
+			now, string(resolution), o.Location, o.Component, o.AdvisoryID); err != nil {
 			return nil, err
 		}
 		ev := Event{Kind: resolution, Finding: o.Finding, FirstSeen: o.firstSeen, DaysOpen: days(o.firstSeen, run.Now)}
-		if resolution == Fixed {
+		switch resolution {
+		case Fixed:
 			changes.Fixed = append(changes.Fixed, ev)
-		} else {
+		case Removed:
 			changes.Removed = append(changes.Removed, ev)
+		case Withdrawn:
+			changes.Withdrawn = append(changes.Withdrawn, ev)
 		}
 	}
 
@@ -348,7 +407,7 @@ func openFindings(tx *sql.Tx) ([]stored, error) {
 }
 
 const deliveryJoin = `LEFT JOIN deliveries d ON d.channel = ? AND d.location = f.location AND d.component = f.component
-	AND d.version = f.version AND d.advisory_id = f.advisory_id `
+	AND d.advisory_id = f.advisory_id `
 
 func (s *Store) Pending(channel, scope string, now time.Time, renotify time.Duration) ([]Event, error) {
 	pick := func(where string, extra ...any) ([]stored, error) {
@@ -416,15 +475,15 @@ func (s *Store) MarkDelivered(channel string, events []Event, now time.Time) err
 		return fmt.Errorf("state: %w", err)
 	}
 	for _, ev := range events {
-		if ev.Kind == Fixed || ev.Kind == Removed {
+		if ev.Kind.resolves() {
 			_, err = tx.Exec(`UPDATE deliveries SET resolve_notified = 1
-				WHERE channel = ? AND location = ? AND component = ? AND version = ? AND advisory_id = ?`,
-				channel, ev.Location, ev.Component, ev.Version, ev.AdvisoryID)
+				WHERE channel = ? AND location = ? AND component = ? AND advisory_id = ?`,
+				channel, ev.Location, ev.Component, ev.AdvisoryID)
 		} else {
-			_, err = tx.Exec(`INSERT INTO deliveries (channel, location, component, version, advisory_id, notified_at)
-				VALUES (?, ?, ?, ?, ?, ?)
-				ON CONFLICT (channel, location, component, version, advisory_id) DO UPDATE SET notified_at = excluded.notified_at`,
-				channel, ev.Location, ev.Component, ev.Version, ev.AdvisoryID, now.Unix())
+			_, err = tx.Exec(`INSERT INTO deliveries (channel, location, component, advisory_id, notified_at)
+				VALUES (?, ?, ?, ?, ?)
+				ON CONFLICT (channel, location, component, advisory_id) DO UPDATE SET notified_at = excluded.notified_at`,
+				channel, ev.Location, ev.Component, ev.AdvisoryID, now.Unix())
 		}
 		if err != nil {
 			return fmt.Errorf("state: %w", err)
@@ -454,4 +513,173 @@ func days(from, to time.Time) int {
 		return 0
 	}
 	return int(to.Sub(from).Hours() / 24)
+}
+
+// nixSource is where nix system packages are recorded; their component names were refined to an exact nixpkgs
+// vendor/product, so rekey leaves them alone.
+const nixSource = "/run/current-system"
+
+// rekey rebuilds both tables for the current primary keys: findings are keyed by location, component and advisory,
+// without the version, and components are named after the install rather than the vendor of whichever advisory range
+// matched. Rows that now share a key are merged, keeping the earliest first_seen, so a finding's age survives.
+func rekey(tx *sql.Tx) error {
+	outdated, err := hasColumn(tx, "deliveries", "version")
+	if err != nil || !outdated {
+		return err
+	}
+
+	type merged struct {
+		stored
+		lastSeen   int64
+		resolvedAt sql.NullInt64
+		notifiedAt int64
+		resolveNot int
+	}
+	findings := map[key]*merged{}
+	var order []key
+
+	rows, err := tx.Query(`SELECT location, component, version, advisory_id, COALESCE(severity, ''), score,
+		COALESCE(fixed_in, ''), scope, first_seen, last_seen, clean_runs, resolved_at, COALESCE(resolution, '')
+		FROM findings ORDER BY last_seen, first_seen`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var m merged
+		var first int64
+		if err := rows.Scan(&m.Location, &m.Component, &m.Version, &m.AdvisoryID, &m.Severity, &m.Score, &m.FixedIn,
+			&m.Scope, &first, &m.lastSeen, &m.cleanRuns, &m.resolvedAt, &m.resolution); err != nil {
+			rows.Close()
+			return err
+		}
+		m.firstSeen = time.Unix(first, 0)
+		m.Component = rename(m.Location, m.Component)
+		k := m.Finding.key()
+		prev, ok := findings[k]
+		if !ok {
+			findings[k] = &m
+			order = append(order, k)
+			continue
+		}
+		// Rows arrive oldest-seen first, so the later one describes the install as it is now; the age is the oldest,
+		// which gives back what a version bump or a second vendor name had reset.
+		if prev.firstSeen.Before(m.firstSeen) {
+			m.firstSeen = prev.firstSeen
+		}
+		m.cleanRuns = min(m.cleanRuns, prev.cleanRuns)
+		if !prev.resolvedAt.Valid {
+			m.resolvedAt, m.resolution = sql.NullInt64{}, ""
+		}
+		findings[k] = &m
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	type deliveryKey struct {
+		channel string
+		key
+	}
+	deliveries := map[deliveryKey]*merged{}
+	var deliveryOrder []deliveryKey
+	rows, err = tx.Query(`SELECT channel, location, component, advisory_id, notified_at, resolve_notified FROM deliveries`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var d merged
+		var channel string
+		if err := rows.Scan(&channel, &d.Location, &d.Component, &d.AdvisoryID, &d.notifiedAt, &d.resolveNot); err != nil {
+			rows.Close()
+			return err
+		}
+		d.Component = rename(d.Location, d.Component)
+		k := deliveryKey{channel, d.Finding.key()}
+		if prev, ok := deliveries[k]; ok {
+			d.notifiedAt = max(d.notifiedAt, prev.notifiedAt)
+			d.resolveNot = min(d.resolveNot, prev.resolveNot)
+		} else {
+			deliveryOrder = append(deliveryOrder, k)
+		}
+		deliveries[k] = &d
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	for _, stmt := range []string{`DROP TABLE findings`, `DROP TABLE deliveries`, schema} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return err
+		}
+	}
+	for _, k := range order {
+		f := findings[k]
+		if _, err := tx.Exec(`INSERT INTO findings (location, component, version, advisory_id, severity, score, fixed_in,
+			scope, first_seen, last_seen, clean_runs, resolved_at, resolution)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			f.Location, f.Component, f.Version, f.AdvisoryID, f.Severity, f.Score, f.FixedIn, f.Scope,
+			f.firstSeen.Unix(), f.lastSeen, f.cleanRuns, f.resolvedAt, nullString(f.resolution)); err != nil {
+			return err
+		}
+	}
+	for _, k := range deliveryOrder {
+		d := deliveries[k]
+		if _, err := tx.Exec(`INSERT INTO deliveries (channel, location, component, advisory_id, notified_at, resolve_notified)
+			VALUES (?, ?, ?, ?, ?, ?)`, k.channel, d.Location, d.Component, d.AdvisoryID, d.notifiedAt, d.resolveNot); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func nullString(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+func hasColumn(tx *sql.Tx, table, column string) (bool, error) {
+	rows, err := tx.Query(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`, table, column)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	return rows.Next(), rows.Err()
+}
+
+// rename maps a stored component name to the name the install is tracked under now.
+func rename(location, component string) string {
+	if location == nixSource {
+		return component
+	}
+	switch filepath.Base(location) {
+	case "composer.lock":
+		// A Composer package is always vendor/name; anything before that is the vendor of a matched range.
+		return lastSegments(component, 2)
+	case "pnpm-lock.yaml":
+		// An npm name has a slash only when it is scoped (@scope/name).
+		parts := strings.Split(component, "/")
+		for i, p := range parts {
+			if strings.HasPrefix(p, "@") {
+				return strings.Join(parts[i:min(i+2, len(parts))], "/")
+			}
+		}
+		return parts[len(parts)-1]
+	}
+	return lastSegment(component)
+}
+
+func lastSegment(component string) string { return lastSegments(component, 1) }
+
+func lastSegments(component string, n int) string {
+	parts := strings.Split(component, "/")
+	if len(parts) <= n {
+		return component
+	}
+	return strings.Join(parts[len(parts)-n:], "/")
 }

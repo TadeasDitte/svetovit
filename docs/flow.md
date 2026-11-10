@@ -32,13 +32,13 @@ flowchart TD
     M -->|min score / severity| P[drop]
     N --> V
     O --> V
-    M --> V[Vulnerable<br/>vendor from affected_range.vendor<br/>fixed_in]
+    M --> V[Vulnerable<br/>named after the scanned component<br/>one advisory per install<br/>fixed_in]
 
     G -. nix only .-> Q[system.NixCPEs<br/>re-check flagged + ambiguous names<br/>under the exact nixpkgs vendor/product]
     Q --> H
 
     V --> T{--state?}
-    T -->|yes| W[state.Sync<br/>new / still open / fixed after 2 clean scans /<br/>removed when location is gone;<br/>unscanned locations untouched]
+    T -->|yes| W[state.Sync<br/>keyed by location + component + advisory<br/>new / still open / fixed after 2 clean scans /<br/>withdrawn when the install is unchanged /<br/>removed when location is gone;<br/>unscanned locations untouched]
     W --> X[--notify-url / -system-url / -apps-url:<br/>post what each channel was not told yet<br/>+ --renotify reminders]
     T -->|no, --notify-url| X
     W --> R[report.Print / WriteJSON<br/>per location optional<br/>+ changes since last scan]
@@ -53,7 +53,8 @@ flowchart TD
 |---|---|---|
 | API answers `ambiguous: true` | CMS extensions are retried per candidate vendor, everything else is reported as unmatched | the API refuses to guess, a bare OS package name could belong to unrelated software |
 | Extension has no vendor | a finding only counts when `plugs_into` equals the CMS | a dir name like `gallery` or `cache` otherwise matches every vendor and ecosystem that ships one |
-| Vendor of a finding | `affected_range.vendor` from the check response | no extra `/vulnerabilities/{id}` lookups, which count against 60 requests/minute |
+| Name of a finding's component | the component as scanned (plugin directory, lock file package, OS package), never `affected_range.vendor` | the API files one product's ranges under several vendor names, so the matched range would split one install into several components and report an advisory once per name |
 | 429 | retried, honoring `Retry-After` (max 5) | the API is throttled |
 | WordPress plugin version | read from the file with a `Plugin Name:` header | a bundled library's `Version:` line in another file is not the plugin's version |
-| Finding resolution with `--state` | fixed only after 2 consecutive scans of its location miss it; a deleted location is "removed"; locations not scanned this run are left alone | a failed or partial scan must not look like a clean one |
+| Finding resolution with `--state` | fixed only after 2 consecutive scans of its location miss it and the affected version is gone; an advisory missing for an unchanged install is "withdrawn"; a deleted location is "removed"; locations not scanned this run are left alone | a failed or partial scan, or a gap in the server's data, must not look like remediation |
+| Identity of a finding | location + component + advisory, with the installed version as an attribute | an update to a version the advisory still affects is not a fix, and must not restart the finding's age |
