@@ -88,7 +88,13 @@ Notes:
 - **dpkg** packages are reported under their source package name and version (e.g. `openssl`, not `libssl3`),
   which is how Debian and Ubuntu advisories are keyed.
 - **apk** packages are reported under their origin package for the same reason.
-- **rpm** epochs of `0` are dropped from versions.
+- **rpm** epochs of `0` are dropped from versions; a missing epoch is read back as `0` when a finding is checked
+  against the advisory.
+- **rpm** findings are dropped when the installed package cannot be the distro build the erratum is about: its
+  epoch is below the advisory's, so rpm counts it as older for ever, yet its version is already at or past the
+  one named as fixed. That is a self-built or third-party package (`nginx 1.31.8` with epoch `0` against Rocky's
+  `2:1.26.3-...`), and no later build of it could ever clear the advisory. The package is listed as unmatched
+  with the reason instead, so it stays visible.
 - **Derivatives** use the parent's package manager, but the ecosystem is built from their own `ID`. One whose
   advisories are not published under that ID gets fewer matches.
 - **NixOS** has no advisory ecosystem, so packages are matched against NVD by name. Every package that comes back

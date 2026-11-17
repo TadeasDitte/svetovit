@@ -36,6 +36,41 @@ func (r *CheckResponse) Remove(match func(product string) bool) {
 	}
 }
 
+// Reclassify files every finding drop picks out under Unmatched with note instead, keeping a package
+// whose advisories are not evidence of a missing patch visible without counting it as vulnerable.
+// It returns how many findings were moved.
+func (r *CheckResponse) Reclassify(drop func(Vulnerability) bool, note string) int {
+	move := func(vulns []Vulnerability) ([]Vulnerability, []UnmatchedComponent) {
+		kept := vulns[:0]
+		var moved []UnmatchedComponent
+		for _, v := range vulns {
+			if !drop(v) {
+				kept = append(kept, v)
+				continue
+			}
+			moved = append(moved, UnmatchedComponent{
+				Vendor:           v.Vendor,
+				Product:          v.Product,
+				InstalledVersion: v.InstalledVersion,
+				LocalID:          v.LocalID,
+				Note:             note,
+			})
+		}
+		return kept, moved
+	}
+
+	vulnerable, moved := move(r.Vulnerable)
+	r.Vulnerable = vulnerable
+	r.Unmatched = append(r.Unmatched, moved...)
+	for _, entry := range r.ByLocation {
+		kept, movedHere := move(entry.Vulnerable)
+		entry.Vulnerable = kept
+		entry.Unmatched = append(entry.Unmatched, movedHere...)
+	}
+	r.dedupe()
+	return len(moved)
+}
+
 func (r *CheckResponse) Merge(other *CheckResponse) {
 	r.Vulnerable = append(r.Vulnerable, other.Vulnerable...)
 	r.Unmatched = append(r.Unmatched, other.Unmatched...)

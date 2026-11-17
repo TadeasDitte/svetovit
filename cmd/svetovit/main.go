@@ -288,6 +288,16 @@ func run(args []string) int {
 	return 0
 }
 
+const foreignRPMNote = "not the distro's build: epoch below the advisory's, version already past its fix"
+
+// Distro errata are written against the distro's own builds. A package that is not one of them compares
+// older for ever on its epoch alone, so its advisories would be reported unpatched on every scan.
+func dropForeignRPMs(resp *rozhanitsy.CheckResponse) int {
+	return resp.Reclassify(func(v rozhanitsy.Vulnerability) bool {
+		return system.ForeignRPM(v.InstalledVersion, v.FixedIn)
+	}, foreignRPMNote)
+}
+
 func checkSystem(client *rozhanitsy.Client, minScore float64, severities []string, includeLow bool) (*report.System, []rozhanitsy.Component, error) {
 	env, err := system.Detect()
 	if errors.Is(err, system.ErrUnsupported) {
@@ -317,6 +327,10 @@ func checkSystem(client *rozhanitsy.Client, minScore float64, severities []strin
 	resp, err := client.CheckVulns(context.Background(), components, minScore, severities, includeLow)
 	if err != nil {
 		return nil, nil, fmt.Errorf("checking system packages: %w", err)
+	}
+
+	if env.Manager == system.RPM {
+		dropForeignRPMs(resp)
 	}
 
 	if env.Manager == system.Nix {

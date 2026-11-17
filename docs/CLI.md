@@ -117,8 +117,9 @@ requests answered with 429, a 5xx or a network error are retried, so raise this 
 - **bounded**: findings where the component's version falls inside a vulnerable range given by the advisory.
   These are the actionable ones.
 - **unbound** (listed as "unmatched"): Svetovit could not confirm whether the component is affected, because an
-  advisory names the product without affected versions, or because the name is shared by several vendors and the API
-  refuses to guess.
+  advisory names the product without affected versions, because the name is shared by several vendors and the API
+  refuses to guess, or because the installed package is not the distro build its errata are written against (noted
+  per package in the report).
 - **all**: both.
 
 Use `bounded` for alerting, where every line should need action; `all` for audits.

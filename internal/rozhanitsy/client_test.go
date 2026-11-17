@@ -369,3 +369,44 @@ func TestOneInstallIsOneComponentWhateverVendorsMatch(t *testing.T) {
 		t.Errorf("unmatched listed more than once: %+v", resp.Unmatched)
 	}
 }
+
+func TestReclassifyMovesFindingsToUnmatched(t *testing.T) {
+	foreign := Vulnerability{Product: "nginx", InstalledVersion: "1.31.8-.el10", LocalID: "rpm", CVEID: "RLSA-2026:18063", FixedIn: "2:1.26.3-16.el10_3.1"}
+	alsoForeign := foreign
+	alsoForeign.CVEID = "RLSA-2026:4705"
+	real := Vulnerability{Product: "curl", InstalledVersion: "8.9.1-1.el10", LocalID: "rpm", CVEID: "RLSA-2026:50000", FixedIn: "8.9.1-2.el10"}
+
+	resp := &CheckResponse{
+		Vulnerable: []Vulnerability{foreign, alsoForeign, real},
+		ByLocation: map[string]*LocationReport{"rpm": {Vulnerable: []Vulnerability{foreign, alsoForeign, real}}},
+	}
+
+	moved := resp.Reclassify(func(v Vulnerability) bool { return v.Product == "nginx" }, "not the distro's build")
+	if moved != 2 {
+		t.Errorf("moved %d findings, want 2", moved)
+	}
+	if len(resp.Vulnerable) != 1 || resp.Vulnerable[0].CVEID != real.CVEID {
+		t.Errorf("kept %+v, want only %s", resp.Vulnerable, real.CVEID)
+	}
+	// Both nginx findings name the same install, so one unmatched entry stands for them.
+	want := UnmatchedComponent{Product: "nginx", InstalledVersion: "1.31.8-.el10", LocalID: "rpm", Note: "not the distro's build"}
+	if len(resp.Unmatched) != 1 || resp.Unmatched[0] != want {
+		t.Errorf("unmatched %+v, want [%+v]", resp.Unmatched, want)
+	}
+	loc := resp.ByLocation["rpm"]
+	if len(loc.Vulnerable) != 1 || loc.Vulnerable[0].CVEID != real.CVEID || len(loc.Unmatched) != 1 || loc.Unmatched[0] != want {
+		t.Errorf("location report not updated: %+v", loc)
+	}
+}
+
+func TestReclassifyKeepsEverythingWhenNothingMatches(t *testing.T) {
+	v := Vulnerability{Product: "nginx", InstalledVersion: "1.31.8", LocalID: "rpm", CVEID: "RLSA-1"}
+	resp := &CheckResponse{Vulnerable: []Vulnerability{v}, ByLocation: map[string]*LocationReport{"rpm": {Vulnerable: []Vulnerability{v}}}}
+
+	if moved := resp.Reclassify(func(Vulnerability) bool { return false }, "x"); moved != 0 {
+		t.Fatalf("moved %d findings, want 0", moved)
+	}
+	if len(resp.Vulnerable) != 1 || len(resp.Unmatched) != 0 || len(resp.ByLocation["rpm"].Vulnerable) != 1 {
+		t.Errorf("response changed: %+v", resp)
+	}
+}

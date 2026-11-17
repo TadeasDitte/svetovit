@@ -194,6 +194,47 @@ func TestPrintSystemBlock(t *testing.T) {
 	}
 }
 
+func TestPrintNotedPackagesInSystemBlock(t *testing.T) {
+	sys := &System{
+		Name:      "Rocky Linux 10.2",
+		Ecosystem: "Rocky Linux:10",
+		Response: &rozhanitsy.CheckResponse{
+			Unmatched: []rozhanitsy.UnmatchedComponent{
+				{Product: "zlib", LocalID: "rpm"},
+				{Product: "nginx", InstalledVersion: "1.31.8-.el10", LocalID: "rpm", Note: "not the distro's build"},
+			},
+		},
+	}
+	var buf bytes.Buffer
+	Print(&buf, &rozhanitsy.CheckResponse{CheckedAt: checkedAt}, sys, nil, Sections{Unbound: true}, false)
+	out := buf.String()
+	if !strings.Contains(out, "- nginx 1.31.8-.el10 [not the distro's build]") {
+		t.Errorf("noted package not listed in:\n%s", out)
+	}
+	if strings.Contains(out, "zlib") {
+		t.Errorf("unnoted package listed in:\n%s", out)
+	}
+}
+
+func TestPrintUnmatchedNotes(t *testing.T) {
+	var buf bytes.Buffer
+	resp := &rozhanitsy.CheckResponse{CheckedAt: checkedAt, Unmatched: []rozhanitsy.UnmatchedComponent{
+		{Product: "gallery", LocalID: "/a", Ambiguous: true},
+		{Product: "nginx", LocalID: "rpm", Ambiguous: true, Note: "not the distro's build"},
+		{Product: "plain", LocalID: "/b"},
+	}}
+	Print(&buf, resp, nil, nil, Sections{Unbound: true}, false)
+	for _, want := range []string{
+		"- gallery (/a) [ambiguous name, several vendors]",
+		"- nginx (rpm) [not the distro's build]",
+		"- plain (/b)\n",
+	} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("missing %q in:\n%s", want, buf.String())
+		}
+	}
+}
+
 func decode(t *testing.T, buf *bytes.Buffer) map[string]any {
 	t.Helper()
 	var out map[string]any

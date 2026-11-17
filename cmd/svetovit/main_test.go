@@ -104,3 +104,41 @@ func TestCollectFindingsNamesComposerPackagesOnce(t *testing.T) {
 		t.Errorf("got %v, want %s", got, want)
 	}
 }
+
+func TestDropForeignRPMsKeepsOnlyDistroBuildFindings(t *testing.T) {
+	const nginx = "1.31.8-.el10" // self-built, epoch 0, ahead of every Rocky nginx
+	fixedIn := []string{
+		"2:1.26.3-2.el10_1.2", "2:1.26.3-6.el10_2.3", "2:1.26.3-6.el10_2.4", "2:1.26.3-16.el10_3.1",
+	}
+	advisories := []string{"RLSA-2026:4705", "RLSA-2026:6906", "RLSA-2026:18063", "RLSA-2026:19159", "RLSA-2026:29874"}
+
+	resp := &rozhanitsy.CheckResponse{ByLocation: map[string]*rozhanitsy.LocationReport{"rpm": {}}}
+	for i, id := range advisories {
+		v := rozhanitsy.Vulnerability{
+			Product: "nginx", InstalledVersion: nginx, LocalID: "rpm",
+			CVEID: id, CVSSSeverity: "HIGH", FixedIn: fixedIn[i%len(fixedIn)],
+		}
+		resp.Vulnerable = append(resp.Vulnerable, v)
+		resp.ByLocation["rpm"].Vulnerable = append(resp.ByLocation["rpm"].Vulnerable, v)
+	}
+	// A distro build that really is behind its erratum stays a finding.
+	kept := rozhanitsy.Vulnerability{
+		Product: "openssl", InstalledVersion: "1:3.5.1-4.el10_2", LocalID: "rpm",
+		CVEID: "RLSA-2026:70000", CVSSSeverity: "CRITICAL", FixedIn: "1:3.5.1-9.el10_3",
+	}
+	resp.Vulnerable = append(resp.Vulnerable, kept)
+	resp.ByLocation["rpm"].Vulnerable = append(resp.ByLocation["rpm"].Vulnerable, kept)
+
+	if moved := dropForeignRPMs(resp); moved != len(advisories) {
+		t.Fatalf("moved %d findings, want %d", moved, len(advisories))
+	}
+	if len(resp.Vulnerable) != 1 || resp.Vulnerable[0].CVEID != kept.CVEID {
+		t.Errorf("findings left: %+v, want only %s", resp.Vulnerable, kept.CVEID)
+	}
+	if len(resp.Unmatched) != 1 || resp.Unmatched[0].Product != "nginx" || resp.Unmatched[0].Note != foreignRPMNote {
+		t.Errorf("unmatched: %+v, want one noted nginx entry", resp.Unmatched)
+	}
+	if got := resp.ByLocation["rpm"]; len(got.Vulnerable) != 1 || len(got.Unmatched) != 1 {
+		t.Errorf("location report: %+v", got)
+	}
+}

@@ -89,6 +89,7 @@ func Print(w io.Writer, resp *rozhanitsy.CheckResponse, system *System, changes 
 			// Most OS packages have no advisories at all, so listing them would drown the report.
 			fmt.Fprintf(w, "%d package%s could not be matched against the vulnerability database (see JSON output for the list).\n",
 				len(system.Response.Unmatched), suffix(len(system.Response.Unmatched)))
+			printNoted(w, system.Response.Unmatched)
 		}
 	}
 
@@ -183,13 +184,29 @@ func printUnmatched(w io.Writer, unmatched []rozhanitsy.UnmatchedComponent) {
 	fmt.Fprintf(w, "%d component%s could not be matched against the vulnerability database:\n",
 		len(unmatched), suffix(len(unmatched)))
 	for _, u := range unmatched {
-		name := rozhanitsy.QualifiedName(u.Vendor, u.Product)
-		note := ""
-		if u.Ambiguous {
-			note = " [ambiguous name, several vendors]"
-		}
-		fmt.Fprintf(w, "  - %s (%s)%s\n", name, u.LocalID, note)
+		fmt.Fprintf(w, "  - %s (%s)%s\n", rozhanitsy.QualifiedName(u.Vendor, u.Product), u.LocalID, noteOf(u))
 	}
+}
+
+// printNoted lists the packages the API did answer for but whose answer was rejected; unlike the bulk
+// of the unmatched list they are few, and a dropped finding has to stay visible.
+func printNoted(w io.Writer, unmatched []rozhanitsy.UnmatchedComponent) {
+	for _, u := range unmatched {
+		if u.Note == "" {
+			continue
+		}
+		fmt.Fprintf(w, "  - %s %s%s\n", rozhanitsy.QualifiedName(u.Vendor, u.Product), u.InstalledVersion, noteOf(u))
+	}
+}
+
+func noteOf(u rozhanitsy.UnmatchedComponent) string {
+	switch {
+	case u.Note != "":
+		return " [" + u.Note + "]"
+	case u.Ambiguous:
+		return " [ambiguous name, several vendors]"
+	}
+	return ""
 }
 
 type jsonReport struct {

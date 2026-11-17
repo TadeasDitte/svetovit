@@ -144,6 +144,9 @@ type UnmatchedComponent struct {
 	LocalID          string `json:"local_id,omitempty"`
 
 	Ambiguous bool `json:"ambiguous,omitempty"`
+
+	// Note says why a component the API did answer for is reported here instead of as vulnerable.
+	Note string `json:"note,omitempty"`
 }
 
 type LocationReport struct {

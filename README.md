@@ -105,9 +105,9 @@ working directory.
   key in JSON output). Use `--skip-system` to leave them out.
 - Results fall into two groups, selectable with `--confidence`:
   - **bounded**: the component's version falls inside a vulnerable range given by the advisory.
-  - **unbound** (listed as "unmatched"): Svetovit could not confirm whether the component is affected, either because
-    an advisory names the product but gives no affected versions, or because the product name is shared by several
-    vendors and the API refuses to guess.
+  - **unbound** (listed as "unmatched"): Svetovit could not confirm whether the component is affected, because an
+    advisory names the product but gives no affected versions, because the product name is shared by several vendors
+    and the API refuses to guess, or because the installed rpm is not the distro build its errata are written against.
 
 ## Running across a fleet
 
