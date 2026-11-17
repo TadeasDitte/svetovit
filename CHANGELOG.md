@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.9.0](https://github.com/TadeasDitte/svetovit/compare/v1.8.0...v1.9.0) (2026-11-17)
+
+
+### Features
+
+* enhance vulnerability reporting for foreign RPM packages and improve documentation ([bd0953d](https://github.com/TadeasDitte/svetovit/commit/bd0953d396116831e5e026d3e3011767cb0dc15b))
+
 ## [1.8.0](https://github.com/TadeasDitte/svetovit/compare/v1.7.0...v1.8.0) (2026-11-10)
 
 
